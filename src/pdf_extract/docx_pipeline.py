@@ -44,6 +44,13 @@ def process_docx(path: str, source: dict[str, Any]) -> ExtractionResult:
     source["paragraphs"] = len(content.paragraphs)
     source["tables"] = len(content.tables)
 
+    if content.unresolved_fields:
+        errors.append(
+            "Trường động Word (PAGE/NUMPAGES/DATE...) không có giá trị đã tính "
+            "sẵn trong file nên bị đọc thiếu ký tự — mở file bằng Word rồi lưu "
+            f"lại để Word tính và ghi kết quả: {', '.join(content.unresolved_fields)}"
+        )
+
     # Cổng 5: đối chứng chéo, một chiều — engine khác tìm ra chữ ta không có
     # thì chặn; phần chúng thêm (pandoc vẽ khung bảng) chỉ ghi nhận.
     verify = cross_verify_docx(path, canonical)

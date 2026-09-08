@@ -91,21 +91,27 @@ def _write_page_footer(document: Document, footers: list[dict]) -> None:
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     paragraph.add_run(f"{label} ").bold = True
 
-    _add_field(paragraph, "PAGE")
+    # Word luôn ghi kèm KẾT QUẢ đã tính khi lưu file, để hiển thị ngay lần mở
+    # sau mà không cần tính lại. Không ghi kèm thì field không đọc được cho
+    # tới khi có Word tính lại — thiếu đúng thứ field này tồn tại để cung cấp.
+    _add_field(paragraph, "PAGE", cached="1")
     paragraph.add_run("/")
-    _add_field(paragraph, "NUMPAGES")
+    _add_field(paragraph, "NUMPAGES", cached=str(len(footers)))
 
 
-def _add_field(paragraph, instruction: str) -> None:
-    """Chèn một field Word (PAGE, NUMPAGES) vào đoạn văn."""
+def _add_field(paragraph, instruction: str, cached: str) -> None:
+    """Chèn một field Word (PAGE, NUMPAGES) kèm kết quả đã tính (cached)."""
     run = paragraph.add_run()
 
     begin = run._r.makeelement(qn("w:fldChar"), {qn("w:fldCharType"): "begin"})
-    text = run._r.makeelement(qn("w:instrText"), {qn("xml:space"): "preserve"})
-    text.text = f" {instruction} "
+    instr_text = run._r.makeelement(qn("w:instrText"), {qn("xml:space"): "preserve"})
+    instr_text.text = f" {instruction} "
+    separate = run._r.makeelement(qn("w:fldChar"), {qn("w:fldCharType"): "separate"})
+    result = run._r.makeelement(qn("w:t"), {})
+    result.text = cached
     end = run._r.makeelement(qn("w:fldChar"), {qn("w:fldCharType"): "end"})
 
-    for element in (begin, text, end):
+    for element in (begin, instr_text, separate, result, end):
         run._r.append(element)
 
 

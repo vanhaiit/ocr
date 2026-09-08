@@ -31,7 +31,8 @@ from .templates.chung_thu_field_names import comparable_label
 # Số cột tối thiểu để coi một bảng là BẢNG DỮ LIỆU (giao cho template xử lý).
 DATA_TABLE_MIN_COLUMNS = 3
 
-# Số từ tối đa của phần trước dấu hai chấm để coi đoạn đó là cặp nhãn-giá trị.
+# Số từ tối đa của phần trước dấu hai chấm để coi đoạn đó là cặp nhãn-giá trị,
+# khi KHÔNG có giá trị sau dấu hai chấm (xem `_classify_paragraph`).
 MAX_LABEL_WORDS = 8
 
 
@@ -169,17 +170,24 @@ def _classify_paragraph(block: LineBlock, paragraph) -> None:
 
     label, separator, value = body.partition(LABEL_SEPARATOR)
 
-    # Nhãn DÀI chỉ được nhận khi ở đầu khối VÀ có giá trị đứng sau dấu hai chấm.
+    # Nhãn DÀI chỉ được xét khi CÓ giá trị thật sau dấu hai chấm — không thì
+    # giới hạn `MAX_LABEL_WORDS` áp dụng như bình thường. Ba ca dễ lẫn:
+    #   III: "Đặc điểm kinh tế - kỹ thuật và hiện trạng: ..." (10 từ, không có
+    #     mã tham chiếu nào) -> nhãn dài thật -> nhận
+    #    XI: "Thời hạn hiệu lực ... phát hành là: 06 tháng" (19 từ, không có mã
+    #     tham chiếu) -> nhãn dài thật -> nhận
+    #   preface: "- Căn cứ Hợp đồng ... và Ông: TÊN" (23 từ, CÓ mã tham chiếu
+    #     "CONTRACT-NO-001", "CONTRACT-DATE-001") -> câu trích dẫn dài, dấu hai
+    #     chấm thuộc "Ông:" chứ không phải ranh giới nhãn thật -> vẫn bị chặn
     #
-    # Hai ca dễ lẫn, phân biệt đúng bằng điều kiện "có giá trị":
-    #   XI: "Thời hạn hiệu lực ... phát hành là: 06 tháng"  -> nhãn dài + có giá trị
-    #    X: "Trên cơ sở các hồ sơ ... như sau:"             -> câu văn xuôi, không giá trị
+    # Số từ một mình không tách được ca thứ ba khỏi hai ca đầu (19 và 23 từ
+    # gần nhau). Tín hiệu tách đúng: nhãn THẬT là cụm mô tả loại/tình huống,
+    # không chứa mã tham chiếu (số hợp đồng, ngày...); câu trích dẫn dài thì
+    # luôn có ít nhất một mã như vậy.
     #
-    # Bên PDF ca thứ hai không xảy ra vì câu đó bị ngắt thành bốn dòng nên dấu
-    # hai chấm không nằm ở dòng đầu. DOCX thì mỗi `<w:p>` là cả đoạn, nên phải
-    # có điều kiện này.
-    block_is_empty = not (block.fields or block.paragraphs or block.items)
-    allow_long = block_is_empty and bool(value.strip())
+    #    X: "Trên cơ sở các hồ sơ ... như sau:" -> câu văn xuôi, không có giá
+    #     trị sau dấu hai chấm -> chặn bằng giới hạn thường, không tới đây.
+    allow_long = bool(value.strip())
 
     if separator and _looks_like_label(label, allow_long=allow_long):
         block.fields.append(
@@ -210,13 +218,24 @@ def _looks_like_label(label: str, allow_long: bool = False) -> bool:
     """Phần trước dấu hai chấm có giống một nhãn hay không.
 
     Cùng quy tắc như bên PDF: bắt đầu bằng chữ hoa hoặc chữ số là điều kiện bắt
-    buộc; giới hạn độ dài chỉ áp dụng khi khối đã có nội dung phía trước.
+    buộc. Nhãn NGẮN (trong giới hạn thường) luôn được nhận, kể cả có chữ số
+    (`"Phụ lục số 01"`) — chỉ nhãn VƯỢT giới hạn mới cần thêm điều kiện, xem
+    `_classify_paragraph`.
     """
     stripped = label.strip()
     if not stripped:
         return False
-    if not allow_long and len(stripped.split()) > MAX_LABEL_WORDS:
-        return False
+
+    words = stripped.split()
+    if len(words) > MAX_LABEL_WORDS:
+        if not allow_long:
+            return False
+
+        # Nhãn thật là cụm mô tả loại/tình huống, không chứa mã tham chiếu (số
+        # hợp đồng, ngày...). Câu trích dẫn dài mà "trông như" một nhãn dài
+        # luôn có ít nhất một mã như vậy chen vào giữa.
+        if any(any(ch.isdigit() for ch in word) for word in words):
+            return False
 
     return stripped[0].isupper() or stripped[0].isdigit()
 

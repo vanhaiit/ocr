@@ -31,8 +31,10 @@ MAX_REPORTED_DIFF_KINDS = 10
 BASELINE_DOCUMENT = "document"
 BASELINE_NONE = "none"
 
-# Ký tự pandoc dùng để vẽ khung bảng khi xuất text.
-TABLE_ART_CHARACTERS = set("-=|+")
+# Ký tự pandoc dùng để vẽ khung bảng khi xuất text. `:` xuất hiện ở giao điểm
+# dòng phân cách header của grid table (kiểu "====:+===="), không phải nội
+# dung — xác nhận bằng cách dump text pandoc thật của bảng chữ ký nhiều cột.
+TABLE_ART_CHARACTERS = set("-=|+:")
 
 
 def comparable_form(text: str) -> str:

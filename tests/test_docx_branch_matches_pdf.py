@@ -219,7 +219,7 @@ def test_docx_cross_verify_is_asymmetric_by_design(pair):
 
     assert pandoc.char_multiset_match
     # pandoc vẽ khung bảng nên nó có thêm ký tự; toàn bộ phải là nét vẽ.
-    assert set(pandoc.only_in_engine) <= set("-=|+"), pandoc.only_in_engine
+    assert set(pandoc.only_in_engine) <= set("-=|+:"), pandoc.only_in_engine
 
 
 def test_docx_json_has_text_layer(pair):

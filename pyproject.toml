@@ -3,10 +3,10 @@ name = "pdf-extract"
 version = "0.1.0"
 description = "PDF có text layer sang JSON, mọi giá trị kèm bằng chứng nguồn gốc"
 requires-python = ">=3.11"
-dependencies = ["pdfplumber>=0.11", "pypdf>=6.0"]
+dependencies = ["pdfplumber>=0.11", "pypdf>=6.0", "python-docx>=1.1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "reportlab>=4.0", "python-docx>=1.1"]
+dev = ["pytest>=8.0", "reportlab>=4.0", "docx2txt>=0.9"]
 
 [project.scripts]
 pdf-extract = "pdf_extract.cli:main"

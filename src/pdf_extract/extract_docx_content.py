@@ -63,6 +63,10 @@ class DocxContent:
     # Thứ tự xuất hiện của đoạn văn và bảng trong thân tài liệu. Cần để parser
     # biết bảng nằm ở mục nào, thay vì phải đoán.
     order: list[tuple[str, int]] = field(default_factory=list)
+    # Trường động Word (PAGE, NUMPAGES, DATE...) không có giá trị đã tính sẵn
+    # trong file — Word chỉ tính khi mở file, XML không có gì để đọc. Ghi lại
+    # để báo lỗi thay vì âm thầm trả về text thiếu ký tự nhưng vẫn coi là đủ.
+    unresolved_fields: list[str] = field(default_factory=list)
 
 
 def extract_docx(path: str) -> DocxContent:
@@ -85,6 +89,8 @@ def _read_body(document: Document, content: DocxContent) -> None:
         if element.tag == qn("w:p"):
             paragraph_index += 1
             text = _element_text(element)
+            location = f"body/p[{paragraph_index}]"
+            _record_unresolved_fields(element, location, content)
 
             if not text.strip():
                 continue
@@ -92,7 +98,7 @@ def _read_body(document: Document, content: DocxContent) -> None:
             content.paragraphs.append(
                 DocxParagraph(
                     text=text,
-                    location=f"body/p[{paragraph_index}]",
+                    location=location,
                     list_level=_list_level(element),
                 )
             )
@@ -101,11 +107,13 @@ def _read_body(document: Document, content: DocxContent) -> None:
 
         if element.tag == qn("w:tbl"):
             table_index += 1
-            content.tables.append(_read_table(element, f"body/tbl[{table_index}]"))
+            content.tables.append(
+                _read_table(element, f"body/tbl[{table_index}]", content)
+            )
             content.order.append(("table", len(content.tables) - 1))
 
 
-def _read_table(element, location: str) -> DocxTable:
+def _read_table(element, location: str, content: DocxContent) -> DocxTable:
     """Đọc một bảng; ô gộp chỉ lấy MỘT lần dù nó trải trên nhiều cột."""
     table = DocxTable(location=location)
 
@@ -113,11 +121,13 @@ def _read_table(element, location: str) -> DocxTable:
         cells: list[SourcedValue] = []
 
         for cell_index, cell in enumerate(row.iterchildren(qn("w:tc")), start=1):
+            cell_location = f"{location}/tr[{row_index}]/tc[{cell_index}]"
+            _record_unresolved_fields(cell, cell_location, content)
             cells.append(
                 SourcedValue(
                     value=_element_text(cell),
                     page=UNPAGINATED,
-                    location=f"{location}/tr[{row_index}]/tc[{cell_index}]",
+                    location=cell_location,
                 )
             )
 
@@ -129,7 +139,11 @@ def _read_table(element, location: str) -> DocxTable:
 def _read_footers(document: Document, content: DocxContent) -> None:
     """Chân trang của từng section. Là text của tài liệu nên phải lấy."""
     for index, section in enumerate(document.sections, start=1):
-        text = _element_text(section.footer._element).strip()
+        footer_element = section.footer._element
+        location = f"sectPr[{index}]/footer"
+        _record_unresolved_fields(footer_element, location, content)
+
+        text = _element_text(footer_element).strip()
         if not text:
             continue
 
@@ -167,6 +181,39 @@ def _element_text(element) -> str:
             parts.append("\n")
 
     return "".join(parts)
+
+
+def _record_unresolved_fields(element, location: str, content: DocxContent) -> None:
+    """Ghi lại field code (PAGE, NUMPAGES, DATE...) không có giá trị đã tính sẵn.
+
+    Field phức hợp của Word là bốn phần theo thứ tự: `fldChar[begin]`,
+    `instrText` (mã lệnh, ví dụ `PAGE`), `fldChar[separate]`, rồi `<w:t>` chứa
+    KẾT QUẢ đã tính — Word ghi kết quả này khi lưu file để hiển thị ngay lần mở
+    sau mà không cần tính lại. Nếu file chưa từng được Word tính (sinh bằng
+    python-docx, chưa mở qua Word) thì không có phần kết quả, `_element_text`
+    đọc field code đó ra chuỗi rỗng — mất ký tự mà không có gì báo hiệu.
+    """
+    fld_char = qn("w:fldChar")
+    instr_text = qn("w:instrText")
+    text_tag = qn("w:t")
+
+    in_field = False
+    has_result = False
+    code = ""
+
+    for node in element.iter():
+        if node.tag == fld_char:
+            kind = node.get(qn("w:fldCharType"))
+            if kind == "begin":
+                in_field, has_result, code = True, False, ""
+            elif kind == "end" and in_field:
+                if not has_result:
+                    content.unresolved_fields.append(f"{location}: {code.strip() or '?'}")
+                in_field = False
+        elif in_field and node.tag == instr_text:
+            code += node.text or ""
+        elif in_field and node.tag == text_tag and node.text:
+            has_result = True
 
 
 def _list_level(element) -> int | None:
