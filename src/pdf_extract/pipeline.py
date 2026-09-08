@@ -24,6 +24,8 @@ import hashlib
 from pathlib import Path
 
 from .audit_font_tounicode import audit_fonts
+from .detect_input_format import detect_format
+from .docx_pipeline import process_docx
 from .build_text_layer_block import build_text_layer
 from .extract_annotation_data import extract_form_fields, extract_hyperlinks
 from .classify_overlay_glyphs import split_overlay_glyphs
@@ -35,7 +37,7 @@ from .extract_text_with_coordinates import (
     extract_positioned_chars,
     group_chars_into_lines,
 )
-from .models import ExtractionResult, ExtractionStatus, PdfClass
+from .models import ExtractionResult, ExtractionStatus, InputFormat, PdfClass
 from .provenance_gate import apply_gate
 from .parse_document_sections import DATA_TABLE_MIN_COLUMNS, parse_document
 from .reconstruct_tables_by_ruling_lines import extract_tables, merge_continued_tables
@@ -50,9 +52,25 @@ def _file_fingerprint(pdf_path: str) -> dict[str, object]:
     return {"file": path.name, "sha256": digest, "bytes": path.stat().st_size}
 
 
-def process_pdf(pdf_path: str) -> ExtractionResult:
-    """Chạy toàn pipeline cho một file PDF và trả kết quả kèm báo cáo kiểm chứng."""
-    source = _file_fingerprint(pdf_path)
+def process_document(path: str) -> ExtractionResult:
+    """Điểm vào duy nhất: nhận dạng định dạng rồi chạy nhánh tương ứng.
+
+    PDF và DOCX có hai tầng đọc khác nhau nhưng dùng chung tầng template và cổng
+    nguồn gốc, nên JSON trả về cùng một hình dạng — bên tiêu thụ không cần biết
+    đầu vào là định dạng nào.
+    """
+    source = _file_fingerprint(path)
+    fmt = detect_format(path)
+
+    if fmt is InputFormat.DOCX:
+        return process_docx(path, source)
+
+    return process_pdf(path, source)
+
+
+def process_pdf(pdf_path: str, source: dict | None = None) -> ExtractionResult:
+    """Chạy nhánh PDF và trả kết quả kèm báo cáo kiểm chứng."""
+    source = _file_fingerprint(pdf_path) if source is None else source
 
     # Cổng 1: loại PDF.
     pdf_class, chars_per_page = classify_pdf(pdf_path)
@@ -62,6 +80,7 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
     if reason is not None:
         return ExtractionResult(
             source=source,
+            input_format=InputFormat.PDF,
             pdf_class=pdf_class,
             template_id=None,
             status=ExtractionStatus.REJECTED,
@@ -163,6 +182,7 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
         )
         return ExtractionResult(
             source=source,
+            input_format=InputFormat.PDF,
             pdf_class=pdf_class,
             template_id=None,
             status=ExtractionStatus.REJECTED,
@@ -221,6 +241,7 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
 
     return ExtractionResult(
         source=source,
+        input_format=InputFormat.PDF,
         pdf_class=pdf_class,
         template_id=template.template_id,
         status=status,

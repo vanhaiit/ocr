@@ -1,14 +1,59 @@
 # pdf-extract
 
-Chuyển PDF **có text layer** sang JSON, mỗi giá trị kèm bằng chứng nguồn gốc (trang + toạ độ). Thiết kế quanh một câu hỏi: *làm sao chứng minh được dữ liệu đúng, thay vì chỉ tuyên bố là đúng.*
+Chuyển **PDF có text layer** hoặc **DOCX** sang JSON, mỗi giá trị kèm bằng chứng nguồn gốc. Thiết kế quanh một câu hỏi: *làm sao chứng minh được dữ liệu đúng, thay vì chỉ tuyên bố là đúng.*
 
 ## Cam kết và giới hạn
 
 | | Cơ chế | Đạt 100%? |
 |---|---|---|
 | PDF → text | Tra bảng `ToUnicode` của font, xác định | **Có** |
-| text → JSON có cấu trúc | Cắt chuỗi theo nhãn + dựng bảng theo đường kẻ ô | **Có, trong phạm vi template đã đăng ký** |
+| DOCX → text | Đọc `<w:t>` trong `word/document.xml`, đã là Unicode | **Có** |
+| text → JSON có cấu trúc | Cắt chuỗi theo nhãn + dựng bảng | **Có, trong phạm vi template đã đăng ký** |
 | PDF scan (ảnh) | Ngoài phạm vi | **Không** — bị từ chối tường minh |
+
+## Hai định dạng, một hình dạng JSON
+
+Định dạng nhận từ **chữ ký byte**, không từ phần mở rộng (`%PDF-`, hoặc gói ZIP có `word/document.xml`). Hai tầng đọc khác nhau nhưng **dùng chung tầng template và cổng nguồn gốc**, nên JSON ra cùng hình dạng — bên tiêu thụ không cần biết đầu vào là gì.
+
+| Câu hỏi | PDF | DOCX |
+|---|---|---|
+| Đâu là một dòng logic? | tự gom glyph theo cao độ | `<w:p>` đã là đoạn hoàn chỉnh |
+| Dòng sau nối tiếp dòng trước? | xét khoảng trống dọc | không cần — Word chỉ ngắt dòng khi hiển thị |
+| Hai cột cạnh nhau? | xét khoảng trống ngang | ô bảng, hoặc tab trong đoạn |
+| Biên bảng ở đâu? | dò đường kẻ ô | `<w:tbl>` đã có cấu trúc |
+| Bằng chứng vị trí | `page` + `bbox` toạ độ | đường dẫn XML (`body/tbl[1]/tr[3]/tc[2]`) |
+
+**DOCX dễ bóc hơn nhưng khó chứng minh hơn** — mất ba cổng. Những cổng đó được báo cáo là `null`, **không phải "xanh"**: báo xanh một cổng không chạy là tạo cảm giác an toàn không có thật.
+
+| Cổng | PDF | DOCX |
+|---|---|---|
+| 2. Soát bảng `ToUnicode` | có nghĩa | **null** — text đã là Unicode, không có bảng map để thiếu |
+| 4. Lọc glyph vẽ trùng | có nghĩa | **null** — đổ bóng là thuộc tính run, không vẽ hai lần |
+| 5. Đối chứng chéo | 3 engine, **hai chiều** | pandoc + docx2txt, **một chiều** |
+| 1. Phân loại | text layer / scan | gói ZIP hợp lệ |
+
+Cổng 5 của DOCX bất đối xứng có lý do: pandoc vẽ khung bảng bằng ký tự (`-`, `=`, `|`, `+`) khi xuất text, nên phần nó *thêm* là trang trí của chính nó. Chỉ chiều **"bộ đọc khác tìm ra chữ mà ta không đọc ra"** mới là lỗi và mới chặn.
+
+### Cùng tài liệu, hai định dạng, cùng giá trị
+
+Đây là phép kiểm mạnh nhất của nhánh DOCX: hai tầng đọc hoàn toàn độc lập phải cho **cùng JSON**.
+
+```
+CT-SAMPLE-001.pdf   verified  124/124   pypdf=4389(raw), poppler=4389(raw)
+CT-SAMPLE-001.docx  verified  118/118   pandoc=5496(document), docx2txt=4371(document)
+
+18/18 field khớp · bảng 5 thửa khớp từng ô · 2 chữ ký khớp · 13 mục cùng thứ tự
+độ phủ ký tự: 100.00% ở cả hai định dạng
+```
+
+`test_docx_branch_matches_pdf.py` khoá phép so này. Lệch một giá trị nghĩa là một trong hai tầng đọc sai.
+
+Sinh bản DOCX từ PDF (giữ nguyên nội dung, dựng lại thành Word có đoạn văn và bảng thật):
+
+```bash
+PYTHONPATH=src:tests ./.venv/bin/python3 -m fixtures.convert_certificate_pdf_to_docx \
+  "samples/CT-SAMPLE-001 - CHUNG-THU-TDG-ANONYMIZED.pdf" samples/docx
+```
 
 PDF lưu chữ dưới dạng mã glyph kèm bảng dịch sang Unicode:
 
@@ -272,6 +317,7 @@ python3 -m venv .venv
 brew install poppler          # engine đối chứng thứ ba; thiếu vẫn chạy nhưng giảm mức bảo đảm
 
 ./.venv/bin/pdf-extract samples --summary-only      # bảng tóm tắt các cổng
+./.venv/bin/pdf-extract samples/docx -o out         # DOCX cũng dùng lệnh này
 ./.venv/bin/pdf-extract samples -o out              # ghi JSON
 ./.venv/bin/pdf-extract file.pdf                    # in JSON ra stdout
 ```
@@ -299,7 +345,8 @@ Bảng mục X dựng đúng 5 và 7 thửa, mỗi ô có bbox riêng.
 
 ```
 src/pdf_extract/
-├── classify_pdf_text_layer.py            # cổng 1
+├── detect_input_format.py                # nhận định dạng theo chữ ký byte
+├── classify_pdf_text_layer.py            # cổng 1 (PDF)
 ├── audit_font_tounicode.py               # cổng 2
 ├── extract_text_with_coordinates.py      # cổng 3 — nguồn chân lý
 ├── detect_duplicate_glyph_layers.py      # cổng 4 — lọc lớp bóng
@@ -311,7 +358,11 @@ src/pdf_extract/
 ├── parse_document_sections.py            # đọc cấu trúc mục (độc lập nghiệp vụ)
 ├── sourced_value_builders.py             # nguyên thuỷ dựng SourcedValue
 ├── provenance_gate.py                    # cổng 9
-├── pipeline.py                            # điều phối
+├── extract_docx_content.py               # đọc DOCX: đoạn văn, bảng, chân trang
+├── parse_docx_sections.py                # cấu trúc mục từ DOCX
+├── cross_verify_docx_readers.py           # cổng 5 (DOCX): pandoc + docx2txt
+├── docx_pipeline.py                       # điều phối nhánh DOCX
+├── pipeline.py                            # điều phối + dispatch theo định dạng
 ├── cli.py
 ├── models.py
 └── templates/
@@ -340,7 +391,7 @@ Pipeline không cần sửa. Tài liệu không khớp mẫu nào bị từ ch�
 ## Test
 
 ```bash
-./.venv/bin/pytest -q      # 297 test
+./.venv/bin/pytest -q      # 312 test
 ```
 
 Test kiểm đúng những điều đã cam kết, không kiểm "chạy được": không mất ký tự giữa các engine, phủ `ToUnicode` 100%, mọi giá trị truy được về nguồn, số dòng bảng và thứ tự STT, và — quan trọng nhất — cổng nguồn gốc thật sự chặn được giá trị bịa cùng giá trị bị sửa một ký tự.
@@ -432,9 +483,10 @@ hai việc khác nhau, và chỉ cổng 2 với cổng 5 nói được việc th
 
 ## Câu hỏi mở
 
-1. **Template tiếp theo**: báo cáo thẩm định giá, hợp đồng, hay loại nào? Mỗi loại cần vài file mẫu để chốt danh sách nhãn.
-2. **Ngưỡng nhận diện template** đang là 0.6. Cần nới hay thắt tuỳ mức khác biệt giữa các biến thể thật.
-3. **Nhãn mới của các bản chứng thư khác** sẽ rơi vào `unmapped_fields` — cần rà định kỳ để bổ sung tên tiếng Anh vào `chung_thu_field_names.py`. Hai file mẫu hiện tại không còn nhãn nào chưa ánh xạ.
-4. **Cột nào là văn xuôi** trong các template sau: hiện phải khai báo tay bằng `rejoin_prose_cell()`. Với vài template thì ổn; nhiều hơn thì nên gắn kiểu cột vào khai báo template.
-5. **Ngưỡng tách chữ trang trí** đang là `2.2 × cỡ chữ trung vị`. Watermark thật thường 3–5 lần, tiêu đề lớn nhất trong chứng thư 1.25 lần — khoảng cách rộng, nhưng cần xác nhận trên tài liệu thật có watermark.
-6. **Số tiền thật**: quy tắc gạch nối chỉ cứu được token ngắt tại `-`. Nếu `1.234.567.000` bị ngắt sau dấu `.` thì cần dữ liệu thật để chốt cách xử lý.
+1. **DOCX thật của bạn** có thể khác bản sinh từ PDF: dùng style Heading thay vì đánh số La Mã trong text, dùng danh sách Word thay vì ký tự gạch đầu dòng, hoặc để cặp nhãn-giá trị trong bảng hai cột. Parser đã chịu được danh sách Word (`w:numPr`) và tab, nhưng cần file thật để chắc.
+2. **Template tiếp theo**: báo cáo thẩm định giá, hợp đồng, hay loại nào? Mỗi loại cần vài file mẫu để chốt danh sách nhãn.
+3. **Ngưỡng nhận diện template** đang là 0.6. Cần nới hay thắt tuỳ mức khác biệt giữa các biến thể thật.
+4. **Nhãn mới của các bản chứng thư khác** sẽ rơi vào `unmapped_fields` — cần rà định kỳ để bổ sung tên tiếng Anh vào `chung_thu_field_names.py`. Hai file mẫu hiện tại không còn nhãn nào chưa ánh xạ.
+5. **Cột nào là văn xuôi** trong các template sau: hiện phải khai báo tay bằng `rejoin_prose_cell()`. Với vài template thì ổn; nhiều hơn thì nên gắn kiểu cột vào khai báo template.
+6. **Ngưỡng tách chữ trang trí** đang là `2.2 × cỡ chữ trung vị`. Watermark thật thường 3–5 lần, tiêu đề lớn nhất trong chứng thư 1.25 lần — khoảng cách rộng, nhưng cần xác nhận trên tài liệu thật có watermark.
+7. **Số tiền thật**: quy tắc gạch nối chỉ cứu được token ngắt tại `-`. Nếu `1.234.567.000` bị ngắt sau dấu `.` thì cần dữ liệu thật để chốt cách xử lý.

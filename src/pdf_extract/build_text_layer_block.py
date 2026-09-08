@@ -23,6 +23,21 @@ from .models import SourcedValue
 from .sourced_value_builders import bbox_of
 
 
+def build_text_layer_from_lines(pages: list[SourcedValue]) -> dict[str, Any]:
+    """Khối text nguyên văn khi nguồn KHÔNG có toạ độ (DOCX).
+
+    DOCX không phân trang nên chỉ có một khối; số trang do Word tính lúc mở
+    file. Không có chữ trang trí riêng vì watermark trong Word là thuộc tính
+    trang, không phải glyph cỡ lớn lẫn vào nội dung.
+    """
+    return {
+        "pages": [
+            {"page": value.page, "text": value} for value in pages if value.value.strip()
+        ],
+        "decorative": [],
+    }
+
+
 def build_text_layer(
     lines: list[TextLine], decorative_chars: list[PositionedChar]
 ) -> dict[str, Any]:

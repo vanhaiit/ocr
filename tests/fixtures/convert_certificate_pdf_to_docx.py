@@ -26,8 +26,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
-from pdf_extract.parse_labeled_lines import SECTION_HEADING_PATTERN
-from pdf_extract.pipeline import process_pdf
+from pdf_extract.pipeline import process_document
+
+from .docx_verbatim_lookups import (
+    bullet_markers,
+    heading_lines,
+    labels_with_colon,
+    marker_for,
+)
 
 # Vị trí tab để cột giá trị thẳng hàng, xấp xỉ bố cục của chứng thư gốc.
 VALUE_TAB_INCHES = 1.75
@@ -39,7 +45,7 @@ TITLE_FONT_SIZE_PT = 15
 
 def convert(pdf_path: str, output_dir: Path) -> Path:
     """Dựng file DOCX từ nội dung đã bóc của một chứng thư PDF."""
-    result = process_pdf(pdf_path)
+    result = process_document(pdf_path)
     if not result.data:
         raise ValueError(f"Không bóc được nội dung từ {pdf_path}: {result.errors}")
 
@@ -49,9 +55,9 @@ def convert(pdf_path: str, output_dir: Path) -> Path:
     data = result.data
     # Ký tự mở đầu mục liệt kê ("-" hay "+") bị parser tách ra khỏi giá trị, nên
     # tra lại từ text nguyên văn để bản DOCX giữ đúng dấu của tài liệu.
-    markers = _bullet_markers(data)
-    headings = _heading_lines(data)
-    colon_labels = _labels_with_colon(data)
+    markers = bullet_markers(data)
+    headings = heading_lines(data)
+    colon_labels = labels_with_colon(data)
 
     _write_preface(document, data["preface"], markers)
 
@@ -68,89 +74,6 @@ def convert(pdf_path: str, output_dir: Path) -> Path:
     document.save(str(target))
 
     return target
-
-
-def _bullet_markers(data: dict) -> dict[str, str]:
-    """Dấu mở đầu mục liệt kê của từng dòng, tra từ text nguyên văn.
-
-    Chứng thư dùng cả "-" và "+" ("+ Phụ lục số 01"). Parser tách dấu ra khỏi
-    giá trị để JSON gọn, nên muốn bản DOCX giống hệt thì phải tra lại từ khối
-    `text_layer` — nơi giữ nguyên văn từng dòng.
-    """
-    markers: dict[str, str] = {}
-
-    for page in data.get("text_layer", {}).get("pages", []):
-        for line in page["text"]["value"].splitlines():
-            stripped = line.strip()
-            if not stripped or stripped[0] not in "-+•*●–":
-                continue
-            remainder = stripped[1:].strip()
-            marker = stripped[0]
-
-            # Tra được bằng cả nội dung đầy đủ của dòng và bằng riêng phần
-            # NHÃN (trước dấu hai chấm) — vì bên gọi có khi chỉ có nhãn.
-            markers[remainder] = marker
-            markers[remainder.split(":")[0].strip()] = marker
-
-    return markers
-
-
-def _marker_for(markers: dict[str, str], text: str) -> str:
-    """Dấu mở đầu của một mục, hoặc rỗng nếu dòng gốc không có dấu nào.
-
-    Tra theo TIỀN TỐ: giá trị trong JSON có thể là chuỗi đã ghép từ nhiều dòng,
-    còn khoá tra được lập từ từng dòng riêng — nên khớp tuyệt đối sẽ trượt với
-    mọi mục dài. Lấy khoá dài nhất là tiền tố của giá trị.
-
-    Không mặc định "-": thêm một dấu mà tài liệu không có là thêm ký tự vào bản
-    DOCX, và khi đó nội dung không còn y nguyên nữa.
-    """
-    needle = text.strip()
-    exact = markers.get(needle)
-    if exact is not None:
-        return exact
-
-    prefixes = [key for key in markers if key and needle.startswith(key)]
-    if not prefixes:
-        return ""
-
-    return markers[max(prefixes, key=len)]
-
-
-def _labels_with_colon(data: dict) -> set[str]:
-    """Các nhãn mà dòng gốc viết kèm dấu hai chấm ngay sau nhãn.
-
-    Bảng giá trị có dòng "Bằng chữ: VALUE..." (nhãn và giá trị trong cùng một ô)
-    bên cạnh "Tổng cộng (đồng)" (nhãn và giá trị ở hai ô). Muốn bản DOCX không
-    thêm cũng không thiếu dấu hai chấm thì phải biết dòng nào vốn có.
-    """
-    labels: set[str] = set()
-
-    for page in data.get("text_layer", {}).get("pages", []):
-        for line in page["text"]["value"].splitlines():
-            head, separator, _ = line.strip().partition(":")
-            if separator:
-                labels.add(head.strip())
-
-    return labels
-
-
-def _heading_lines(data: dict) -> dict[str, str]:
-    """Dòng tiêu đề nguyên văn của từng mục, tra theo số La Mã.
-
-    Lấy nguyên văn thay vì tự dựng lại `"{số}. {tiêu đề}:"` — có mục kết thúc
-    bằng dấu hai chấm, có mục không, và tự thêm dấu là thêm ký tự vào tài liệu.
-    """
-    headings: dict[str, str] = {}
-
-    for page in data.get("text_layer", {}).get("pages", []):
-        for line in page["text"]["value"].splitlines():
-            stripped = line.strip()
-            match = SECTION_HEADING_PATTERN.match(stripped)
-            if match is not None:
-                headings.setdefault(match.group(1), stripped)
-
-    return headings
 
 
 def _write_page_footer(document: Document, footers: list[dict]) -> None:
@@ -254,7 +177,7 @@ def _write_preface(document: Document, preface: dict, markers: dict[str, str]) -
         _paragraph(document, f"{recipient['label']}: {recipient['value']}", bold=True)
 
     for item in preface["items"]:
-        _paragraph(document, f"{_marker_for(markers, item['value'])} {item['value']}".strip())
+        _paragraph(document, f"{marker_for(markers, item['value'])} {item['value']}".strip())
 
 
 def _write_section(
@@ -283,7 +206,7 @@ def _write_section(
             document,
             entry["label"],
             entry.get("value"),
-            _marker_for(markers, entry["label"]),
+            marker_for(markers, entry["label"]),
         )
 
     for paragraph in section["paragraphs"]:
@@ -293,7 +216,7 @@ def _write_section(
         _write_asset_table(document, section["table"], colon_labels)
 
     for item in section["items"]:
-        _paragraph(document, f"{_marker_for(markers, item['value'])} {item['value']}".strip())
+        _paragraph(document, f"{marker_for(markers, item['value'])} {item['value']}".strip())
 
 
 def _write_asset_table(

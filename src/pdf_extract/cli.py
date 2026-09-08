@@ -14,18 +14,28 @@ import sys
 from pathlib import Path
 
 from .models import ExtractionStatus
-from .pipeline import process_pdf
+from .pipeline import process_document
 
 EXIT_ALL_VERIFIED = 0
 EXIT_NEEDS_REVIEW = 1
 EXIT_REJECTED = 2
 
 
+# Các định dạng nhận được. Nhận dạng thật vẫn theo chữ ký byte trong file; danh
+# sách này chỉ dùng để quét thư mục.
+SUPPORTED_SUFFIXES = (".pdf", ".docx")
+
+
 def collect_pdf_paths(target: Path) -> list[Path]:
-    """Nhận một file hoặc quét thư mục tìm PDF."""
+    """Nhận một file hoặc quét thư mục tìm PDF và DOCX."""
     if target.is_file():
         return [target]
-    return sorted(p for p in target.rglob("*.pdf") if p.is_file())
+
+    return sorted(
+        p
+        for p in target.rglob("*")
+        if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pdf-extract",
         description="Chuyển PDF có text layer sang JSON, kèm bằng chứng nguồn gốc từng giá trị.",
     )
-    parser.add_argument("target", type=Path, help="File PDF hoặc thư mục chứa PDF")
+    parser.add_argument(
+        "target", type=Path, help="File PDF/DOCX hoặc thư mục chứa chúng"
+    )
     parser.add_argument(
         "-o",
         "--out-dir",
@@ -68,11 +80,11 @@ def _print_summary(name: str, result_json: dict) -> None:
 
     print(
         f"{result_json['status']:14} | {name}\n"
-        f"  loại PDF        : {verification['pdf_class']}\n"
+        f"  định dạng       : {verification['input_format']}\n"
+        f"  loại PDF        : {verification['pdf_class'] or 'n/a (DOCX)'}\n"
         f"  mẫu             : {result_json['template']}\n"
-        f"  font ToUnicode  : {fonts.get('coverage')}\n"
-        f"  glyph trùng lọc : {glyphs.get('duplicate_glyphs_removed')}/{glyphs.get('total_glyphs')}"
-        f"  | trang trí loại: {glyphs.get('overlay_glyphs_excluded')}\n"
+        f"  font ToUnicode  : {fonts.get('coverage', 'n/a (DOCX)')}\n"
+        f"  glyph trùng lọc : {glyphs.get('duplicate_glyphs_removed', 'n/a (DOCX)')}\n"
         f"  engine khớp     : {cross.get('char_multiset_match')} ({engine_summary})\n"
         f"  nguồn gốc       : {prov.get('verbatim_values')}/{prov.get('total_values')} nguyên văn",
         file=sys.stderr,
@@ -95,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = EXIT_ALL_VERIFIED
 
     for path in paths:
-        result = process_pdf(str(path))
+        result = process_document(str(path))
         payload = result.to_json()
 
         if result.status is ExtractionStatus.REJECTED:

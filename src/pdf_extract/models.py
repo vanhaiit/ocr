@@ -12,6 +12,19 @@ from enum import Enum
 from typing import Any
 
 
+class InputFormat(str, Enum):
+    """Định dạng đầu vào. Quyết định tầng đọc nào chạy và cổng nào áp dụng.
+
+    PDF lưu chữ dưới dạng mã glyph nên cần soát bảng ToUnicode, lọc lớp glyph
+    vẽ trùng, và dựng bảng theo đường kẻ ô. DOCX lưu text đã là Unicode và bảng
+    đã có cấu trúc, nên ba cổng đó KHÔNG áp dụng — chúng được báo cáo là `null`
+    thay vì báo xanh, để không tạo cảm giác đã kiểm mà thật ra không có gì kiểm.
+    """
+
+    PDF = "pdf"
+    DOCX = "docx"
+
+
 class PdfClass(str, Enum):
     """Loại PDF, quyết định pipeline có chạy tiếp hay không."""
 
@@ -59,11 +72,17 @@ class SourcedValue:
     bbox: BoundingBox | None = None
     verbatim: bool = False
     source_lines: list[str] = field(default_factory=list)
+    # Vị trí trong tài liệu nguồn khi KHÔNG có toạ độ: DOCX không phân trang và
+    # không có bbox, nên bằng chứng vị trí là đường dẫn XML
+    # ("body/p[12]", "body/tbl[1]/tr[3]/tc[2]").
+    location: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"value": self.value, "page": self.page, "verbatim": self.verbatim}
         if self.bbox is not None:
             out["bbox"] = self.bbox.as_list()
+        if self.location is not None:
+            out["location"] = self.location
         return out
 
 
@@ -256,7 +275,10 @@ class ExtractionResult:
     """Kết quả hoàn chỉnh của một file PDF."""
 
     source: dict[str, Any]
-    pdf_class: PdfClass
+    input_format: InputFormat
+    # Chỉ có nghĩa với PDF (phân biệt text layer / bản scan). Với DOCX là None —
+    # báo `text_layer` ở đó sẽ ngụ ý một cổng đã chạy mà thật ra không.
+    pdf_class: PdfClass | None
     template_id: str | None
     status: ExtractionStatus
     data: dict[str, Any]
@@ -272,7 +294,8 @@ class ExtractionResult:
             "template": self.template_id,
             "status": self.status.value,
             "verification": {
-                "pdf_class": self.pdf_class.value,
+                "input_format": self.input_format.value,
+                "pdf_class": self.pdf_class.value if self.pdf_class else None,
                 "font_audit": self.font_audit.to_json() if self.font_audit else None,
                 "glyph_layers": self.glyph_layers.to_json() if self.glyph_layers else None,
                 "cross_verify": self.cross_verify.to_json() if self.cross_verify else None,
