@@ -110,6 +110,11 @@ def build_field(
     if label is None:
         return None
 
+    # Ghi lại từng MẢNH NGUỒN. Nhãn và giá trị có thể được ghép từ nhiều dòng
+    # không liền nhau trong thứ tự đọc, khi đó cổng nguồn gốc chứng minh theo
+    # từng mảnh chứ không theo chuỗi liền mạch.
+    label.source_lines = [_fragment_text(group) for group in label_groups]
+
     value_chars = [c for group in value_groups for c in group]
     value = sourced_value_of(
         value_chars,
@@ -118,7 +123,18 @@ def build_field(
         strip_prefixes=(LABEL_SEPARATOR,),
     )
 
+    if value is not None:
+        value.source_lines = [_fragment_text(group) for group in value_groups]
+
     return LabeledField(label=label, value=value)
+
+
+def _fragment_text(chars: list[PositionedChar]) -> str:
+    """Nội dung một mảnh nguồn, đã bỏ ký tự dẫn và gộp khoảng trắng."""
+    text = " ".join(segment_text(chars).split())
+    for prefix in (*BULLET_MARKERS, LABEL_SEPARATOR):
+        text = text.removeprefix(prefix).strip()
+    return text
 
 
 def column_groups_of(line: TextLine) -> list[list[PositionedChar]]:

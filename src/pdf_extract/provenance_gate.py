@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from .extract_text_with_coordinates import PositionedChar, normalize
-from .models import ProvenanceReport, SourcedValue
+from .models import LabelledValue, ProvenanceReport, SourcedValue
 
 # Nới bbox vài điểm khi lọc ký tự: biên ô bảng do đường kẻ định nghĩa, có thể
 # cắt sát mép glyph nên tâm ký tự vẫn nằm trong nhưng cạnh thì tràn ra.
@@ -83,8 +83,31 @@ def verify_value(value: SourcedValue, canonical: str, index: CharIndex | None) -
 
     # Mức 2: chứng minh theo chuỗi con của text chuẩn.
     haystack = _searchable(canonical)
-    value.verbatim = needle in haystack or _collapsed(needle) in _collapsed(haystack)
+    if needle in haystack or _collapsed(needle) in _collapsed(haystack):
+        value.verbatim = True
+        return value
+
+    # Mức 3: chứng minh THEO TỪNG MẢNH NGUỒN.
+    #
+    # Một giá trị có thể được ghép từ nhiều mảnh KHÔNG liền nhau trong thứ tự
+    # đọc — nhãn "Hồ sơ pháp lý khách" + "hàng cung cấp" bị phần giá trị chen
+    # vào giữa. Khi đó nó không thể là substring liền mạch, nhưng vẫn chứng minh
+    # được: mỗi mảnh phải là nguyên văn của tài liệu, VÀ chuỗi ghép lại phải
+    # đúng bằng các mảnh đó nối với nhau. Không có chỗ nào cho ký tự lạ lọt vào.
+    value.verbatim = _fragments_prove(value, haystack)
     return value
+
+
+def _fragments_prove(value: SourcedValue, haystack: str) -> bool:
+    """Mọi mảnh nguồn đều nguyên văn, và ghép lại đúng bằng giá trị."""
+    if not value.source_lines:
+        return False
+
+    if any(_searchable(part) not in haystack for part in value.source_lines):
+        return False
+
+    joined = _collapsed(" ".join(value.source_lines))
+    return joined == _collapsed(value.value)
 
 
 def apply_gate(
@@ -109,6 +132,16 @@ def apply_gate(
             else:
                 unverified.append(path)
             return checked.to_json()
+
+        if isinstance(node, LabelledValue):
+            # Nhãn cũng là chuỗi cắt ra từ tài liệu nên phải chứng minh nguồn
+            # như mọi giá trị khác. Xác thực nhãn trước, rồi làm phẳng thành JSON.
+            label = walk(node.label, f"{path}.label")
+
+            if node.value is None:
+                return {"label": label["value"], "value": None}
+
+            return {"label": label["value"], **walk(node.value, path)}
 
         if isinstance(node, dict):
             return {key: walk(child, f"{path}.{key}" if path else key) for key, child in node.items()}

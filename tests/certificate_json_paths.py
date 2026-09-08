@@ -43,6 +43,8 @@ FIELD_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("sections", "V", "value"),
         ("sections", "V", "fields", "valuation_purpose"),
     ),
+    # Các dòng tổng giữ cả nhãn tiếng Việt, nên node là {label, value, ...} —
+    # `value_at` lấy khoá "value" của node là đúng chỗ.
     "total": ((("sections", "X", "table", "totals", "total"),)),
     "total_rounded": ((("sections", "X", "table", "totals", "total_rounded"),)),
     "total_in_words": ((("sections", "X", "table", "totals", "total_in_words"),)),

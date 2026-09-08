@@ -39,7 +39,12 @@ FALLBACK_FONT_SIZE = 12.0
 
 @dataclass
 class PositionedChar:
-    """Một ký tự kèm toạ độ và font gốc."""
+    """Một ký tự kèm toạ độ, font, và HƯỚNG VIẾT.
+
+    Hướng viết lấy từ ma trận biến đổi của PDF. Cần thiết vì tiêu đề cột hẹp
+    thường được quay 90 độ: với chữ quay, thứ tự đọc chạy theo trục DỌC, nên
+    sắp theo x như chữ thường sẽ cho ra chuỗi ĐẢO NGƯỢC ("TTS" thay vì "STT").
+    """
 
     text: str
     page: int
@@ -49,6 +54,10 @@ class PositionedChar:
     bottom: float
     fontname: str
     size: float
+    # False khi chữ bị quay (ma trận có thành phần dọc trội hơn thành phần ngang).
+    upright: bool = True
+    # Với chữ quay: True nghĩa là đọc từ dưới lên trên trang.
+    reads_upward: bool = False
 
 
 @dataclass
@@ -137,10 +146,29 @@ def extract_positioned_chars(pdf_path: str) -> list[PositionedChar]:
                         bottom=float(c["bottom"]),
                         fontname=str(c.get("fontname", "")),
                         size=float(c.get("size", 0.0)),
+                        **_writing_direction(c.get("matrix")),
                     )
                 )
 
     return fold_combining_marks(chars)
+
+
+def _writing_direction(matrix) -> dict[str, bool]:
+    """Suy ra hướng viết từ ma trận biến đổi text của PDF.
+
+    Hai thành phần đầu của ma trận là vector chỉ hướng đường cơ sở. Thành phần
+    dọc trội hơn ngang nghĩa là chữ bị quay; dấu của nó cho biết chữ đọc lên
+    hay xuống theo hệ toạ độ PDF (gốc dưới-trái, nên dương là lên trên trang).
+    """
+    if not matrix or len(matrix) < 2:
+        return {"upright": True, "reads_upward": False}
+
+    horizontal, vertical = float(matrix[0]), float(matrix[1])
+
+    if abs(vertical) <= abs(horizontal):
+        return {"upright": True, "reads_upward": False}
+
+    return {"upright": False, "reads_upward": vertical > 0}
 
 
 def fold_combining_marks(chars: list[PositionedChar]) -> list[PositionedChar]:
@@ -163,17 +191,26 @@ def fold_combining_marks(chars: list[PositionedChar]) -> list[PositionedChar]:
 
         if is_mark and folded:
             base = folded[-1]
-            # Dấu tổ hợp chiếm cùng vùng với ký tự gốc; hợp nhất bbox để bằng
-            # chứng toạ độ vẫn khoanh đúng ký tự hoàn chỉnh.
+            # Giữ NGUYÊN toạ độ của ký tự gốc, không hợp nhất với dấu.
+            #
+            # Với chữ quay 90 độ, dấu tổ hợp được vẽ lệch sang BÊN cạnh ký tự
+            # gốc (thay vì phía trên như chữ thường). Hợp nhất bbox sẽ dịch tâm
+            # ngang của ký tự ra khỏi dải cột, làm nó rơi vào nhóm khác khi gom
+            # dòng — "Tên tài sản" quay dọc từng ra thành "Tn ti sn" rồi "ảàê".
+            #
+            # Ký tự gốc là thứ định vị chữ; dấu chỉ là nét phụ vẽ kề bên, nên
+            # neo vào gốc cho kết quả ổn định ở cả chữ thường và chữ quay.
             folded[-1] = PositionedChar(
                 text=unicodedata.normalize("NFC", base.text + char.text),
                 page=base.page,
-                x0=min(base.x0, char.x0),
-                x1=max(base.x1, char.x1),
-                top=min(base.top, char.top),
-                bottom=max(base.bottom, char.bottom),
+                x0=base.x0,
+                x1=base.x1,
+                top=base.top,
+                bottom=base.bottom,
                 fontname=base.fontname,
                 size=base.size,
+                upright=base.upright,
+                reads_upward=base.reads_upward,
             )
             continue
 
@@ -195,7 +232,13 @@ def group_chars_into_lines(chars: list[PositionedChar]) -> list[TextLine]:
         by_page.setdefault(c.page, []).append(c)
 
     for page in sorted(by_page):
-        page_chars = sorted(by_page[page], key=lambda c: (c.top, c.x0))
+        upright_chars = [c for c in by_page[page] if c.upright]
+        rotated_chars = [c for c in by_page[page] if not c.upright]
+
+        for group in cluster_rotated_chars(rotated_chars):
+            lines.append(_line_from(group, page))
+
+        page_chars = sorted(upright_chars, key=lambda c: (c.top, c.x0))
         # Ngưỡng gom dòng tính theo cỡ chữ của chính trang đó.
         tolerance = median_font_size(page_chars) * LINE_CLUSTER_RATIO
         buckets: list[list[PositionedChar]] = []
@@ -223,20 +266,52 @@ def group_chars_into_lines(chars: list[PositionedChar]) -> list[TextLine]:
 
         for bucket in buckets:
             bucket.sort(key=lambda c: c.x0)
-            lines.append(
-                TextLine(
-                    text="".join(c.text for c in bucket),
-                    page=page,
-                    x0=min(c.x0 for c in bucket),
-                    x1=max(c.x1 for c in bucket),
-                    top=min(c.top for c in bucket),
-                    bottom=max(c.bottom for c in bucket),
-                    chars=bucket,
-                )
-            )
+            lines.append(_line_from(bucket, page))
 
     lines.sort(key=lambda ln: (ln.page, ln.top, ln.x0))
     return lines
+
+
+def _line_from(chars: list[PositionedChar], page: int) -> TextLine:
+    """Dựng TextLine từ nhóm ký tự đã sắp đúng thứ tự đọc."""
+    return TextLine(
+        text="".join(c.text for c in chars),
+        page=page,
+        x0=min(c.x0 for c in chars),
+        x1=max(c.x1 for c in chars),
+        top=min(c.top for c in chars),
+        bottom=max(c.bottom for c in chars),
+        chars=chars,
+    )
+
+
+def cluster_rotated_chars(chars: list[PositionedChar]) -> list[list[PositionedChar]]:
+    """Gom chữ QUAY thành từng dòng và sắp theo đúng thứ tự đọc.
+
+    Chữ quay 90 độ chạy theo trục dọc, nên phải làm ngược lại chữ thường: gom
+    theo tâm NGANG (mọi glyph của một dòng quay có x gần nhau) và sắp theo trục
+    DỌC. Chữ đọc từ dưới lên thì sắp theo `top` giảm dần.
+
+    Không làm vậy thì tiêu đề cột quay dọc ra chuỗi đảo ngược — "STT" thành
+    "TTS", "Tên tài sản" thành "nảsiàtnêT".
+    """
+    if not chars:
+        return []
+
+    tolerance = median_font_size(chars) * LINE_CLUSTER_RATIO
+    buckets: list[list[PositionedChar]] = []
+
+    for char in sorted(chars, key=lambda c: ((c.x0 + c.x1) / 2, c.top)):
+        center = (char.x0 + char.x1) / 2
+        if buckets and abs(((buckets[-1][0].x0 + buckets[-1][0].x1) / 2) - center) <= tolerance:
+            buckets[-1].append(char)
+        else:
+            buckets.append([char])
+
+    for bucket in buckets:
+        bucket.sort(key=lambda c: c.top, reverse=bucket[0].reads_upward)
+
+    return buckets
 
 
 def _vertical_center(c: PositionedChar) -> float:

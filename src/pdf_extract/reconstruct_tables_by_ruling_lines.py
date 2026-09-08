@@ -23,6 +23,7 @@ import pdfplumber
 from .extract_text_with_coordinates import (
     LINE_CLUSTER_RATIO,
     PositionedChar,
+    cluster_rotated_chars,
     median_font_size,
 )
 from .models import BoundingBox, SourcedValue
@@ -90,7 +91,24 @@ class _PageCharIndex:
 
 
 def _group_into_physical_lines(chars: list[PositionedChar]) -> list[str]:
-    """Gom ký tự trong một ô thành các dòng, theo cùng ngưỡng như tầng trích xuất."""
+    """Gom ký tự trong một ô thành các dòng, theo cùng ngưỡng như tầng trích xuất.
+
+    Chữ QUAY được gom riêng theo trục dọc: tiêu đề cột hẹp thường quay 90 độ, và
+    sắp theo x như chữ thường sẽ cho ra chuỗi đảo ngược ("TTS" thay vì "STT").
+    """
+    upright = [c for c in chars if c.upright]
+    rotated = [c for c in chars if not c.upright]
+
+    lines: list[str] = []
+    for group in cluster_rotated_chars(rotated):
+        text = " ".join("".join(c.text for c in group).split())
+        if text:
+            lines.append(text)
+
+    if not upright:
+        return lines
+
+    chars = upright
     tolerance = median_font_size(chars) * LINE_CLUSTER_RATIO
     buckets: list[list[PositionedChar]] = []
 
@@ -101,7 +119,6 @@ def _group_into_physical_lines(chars: list[PositionedChar]) -> list[str]:
         else:
             buckets.append([char])
 
-    lines: list[str] = []
     for bucket in buckets:
         bucket.sort(key=lambda c: c.x0)
         text = " ".join("".join(c.text for c in bucket).split())

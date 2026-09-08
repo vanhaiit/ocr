@@ -251,5 +251,10 @@ def _extend(target: SourcedValue, line: TextLine) -> SourcedValue:
         box = line_value.bbox
 
     return SourcedValue(
-        value=f"{target.value} {line_value.value}".strip(), page=target.page, bbox=box
+        value=f"{target.value} {line_value.value}".strip(),
+        page=target.page,
+        bbox=box,
+        # Cộng dồn mảnh nguồn: giá trị ghép từ nhiều dòng không liền nhau chỉ
+        # chứng minh được nguồn gốc khi biết nó gồm những mảnh nào.
+        source_lines=[*(target.source_lines or [target.value]), line_value.value],
     )

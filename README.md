@@ -58,6 +58,13 @@ PYTHONPATH=src:tests ./.venv/bin/python3 -m fixtures.generate_font_feature_sampl
 
 **Chữ ẩn** (chế độ tô 3) không hiện trên màn hình nhưng engine vẫn đọc, nên có thể lẫn vào dữ liệu. **Watermark** cỡ lớn nằm chéo trang khiến tâm glyph rơi vào trong ô bảng. Cả hai là dạng sai âm thầm tệ nhất: giá trị vẫn *nguyên văn của PDF* nên cổng nguồn gốc không bắt được — phải xử lý bằng tầng riêng và test riêng.
 
+**Chữ quay 90 độ đọc theo trục dọc.** Sắp theo `x` như chữ thường cho ra chuỗi
+**đảo ngược** — tiêu đề cột `STT` từng ra `TTS`, `Tên tài sản` ra `nảsiàtnêT`.
+Hướng viết lấy từ ma trận biến đổi của PDF; chữ quay được gom theo tâm ngang và
+sắp theo trục dọc. Với chữ quay viết ở dạng NFD, dấu tổ hợp còn được vẽ lệch
+sang *bên* thay vì phía trên, nên khi gộp dấu phải neo vào toạ độ ký tự gốc —
+hợp nhất bbox sẽ đẩy ký tự ra khỏi dải cột.
+
 **Chỉ số trên/dưới nằm lệch đường cơ sở** nên bị gom thành dòng riêng —
 `H₂O` từng bị đọc thành `HO` rồi `2` ở hai dòng, ghép lại sai thành `HO 2`.
 Xử lý bằng cách gom dòng theo **chồng lấn dọc** với ký tự lớn nhất của dòng,
@@ -111,8 +118,12 @@ gán tên tiếng Anh. Nhờ vậy nhãn nào chưa có tên vẫn xuất ra tro
 ```
 
 Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 16 field trong các mục,
-5 thửa đất, 3 dòng tổng, 2 người ký, 3 chân trang — **58/58 giá trị chứng minh
-được là nguyên văn**, không nhãn nào chưa ánh xạ.
+5 thửa đất kèm tiêu đề cột, 3 dòng tổng, 2 người ký, 3 chân trang — **112/112
+giá trị chứng minh được là nguyên văn**, không nhãn nào chưa ánh xạ. Trên cả 15
+file: **981/981 = 100%**.
+
+Mỗi field mang cả `label` nguyên văn tiếng Việt và khóa tiếng Anh, nên đọc JSON
+vẫn đối chiếu được với bản giấy.
 
 ### Vì sao phải đọc cấu trúc trước, đặt tên sau
 
@@ -123,6 +134,23 @@ hiệu, toàn bộ mục VI–IX, mục XII, mục XIII kèm danh sách phụ l�
 
 Giờ `parse_document_sections` đọc cấu trúc trước và **không biết gì về nghiệp
 vụ**; template chỉ làm việc đặt tên. Ánh xạ thiếu không còn làm mất dữ liệu.
+
+### Đo "có nhặt hết chưa" bằng độ phủ ký tự
+
+Câu hỏi này phải đo được, không thể chỉ tuyên bố. Phép đo: lấy toàn bộ ký tự
+trong text layer, lấy toàn bộ ký tự xuất hiện trong JSON (gồm cả khóa dict và
+số), rồi so multiset.
+
+Đo ở mức **ký tự**, không ở mức dòng — JSON tách nhãn khỏi giá trị và ghép các
+dòng bị ngắt lại, nên so nguyên dòng sẽ báo thiếu hàng loạt dù mọi mảnh đều có
+mặt (phép đo sai, không phải dữ liệu sai).
+
+Kết quả: **0 ký tự dữ liệu bị mất** trên 14/15 file. Phần thiếu còn lại chỉ là
+ký tự **cấu trúc** (`:` tách nhãn với giá trị, `-`/`+`/`●` mở đầu mục liệt kê) —
+chúng đã biến thành chính cấu trúc JSON. File hỏng font bị loại khỏi phép đo vì
+ký tự của nó sai từ trong PDF.
+
+`test_json_captures_every_character.py` khoá phép đo này.
 
 ### Ba quy tắc nhận dạng, đều dựa trên dữ liệu có sẵn trong PDF
 
@@ -198,6 +226,10 @@ Quy tắc bất biến: **mọi giá trị chuỗi xuất ra JSON phải chứng
 2. **Theo chuỗi con** (giá trị không có bbox) — phải là substring nguyên văn của text đã trích xuất.
 
 Giá trị không qua được cổng sẽ bị đánh dấu `verbatim: false`, liệt kê đường dẫn trong `unverified_paths`, và cả file chuyển sang `needs_review`. **Không có đường nào cho ra dữ liệu "trông như đúng" mà không chứng minh được.**
+
+**Mức chứng minh thứ ba: theo từng mảnh nguồn.** Một giá trị có thể được ghép từ nhiều mảnh KHÔNG liền nhau trong thứ tự đọc — nhãn `Hồ sơ pháp lý khách` + `hàng cung cấp` bị phần giá trị chen vào giữa. Khi đó nó không thể là substring liền mạch, nhưng vẫn chứng minh được: mỗi mảnh phải là nguyên văn của tài liệu, VÀ chuỗi ghép lại phải đúng bằng các mảnh đó nối với nhau — không có chỗ cho ký tự lạ lọt vào.
+
+**Giá trị phải đi qua cổng, không được đi vòng.** Cổng chỉ xác thực được node mà nó NHẬN RA (`SourcedValue`, `LabelledValue`). Tầng template từng dựng sẵn dict cho các field, khiến toàn bộ `fields` đi vòng qua cổng — ra JSON với `verbatim: false` và không được tính vào báo cáo, mà báo cáo vẫn ghi "101/101" nên nhìn từ ngoài không thấy gì sai. `test_every_value_in_json_passed_the_provenance_gate` khoá lỗi này: mọi node mang giá trị chuỗi đều phải có `verbatim: true`.
 
 Hệ quả quan trọng: nếu sau này thêm tầng LLM để suy luận field, cổng này tự động bắt mọi giá trị bị bịa — chuỗi bịa không khớp với ký tự PDF vẽ ra. Test `TestProvenanceGateRejectsFabrication` khoá đúng tính chất đó.
 
@@ -277,7 +309,7 @@ Pipeline không cần sửa. Tài liệu không khớp mẫu nào bị từ ch�
 ## Test
 
 ```bash
-./.venv/bin/pytest -q      # 221 test
+./.venv/bin/pytest -q      # 292 test
 ```
 
 Test kiểm đúng những điều đã cam kết, không kiểm "chạy được": không mất ký tự giữa các engine, phủ `ToUnicode` 100%, mọi giá trị truy được về nguồn, số dòng bảng và thứ tự STT, và — quan trọng nhất — cổng nguồn gốc thật sự chặn được giá trị bịa cùng giá trị bị sửa một ký tự.

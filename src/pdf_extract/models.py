@@ -68,6 +68,31 @@ class SourcedValue:
 
 
 @dataclass
+class LabelledValue:
+    """Một giá trị kèm NHÃN NGUYÊN VĂN của nó trong tài liệu.
+
+    Phải là một kiểu riêng, không phải dict dựng sẵn: cổng nguồn gốc chỉ duyệt
+    và xác thực các node mà nó NHẬN RA. Bản trước dựng dict ngay tại tầng
+    template nên mọi giá trị trong `fields` đi vòng qua cổng — chúng ra JSON với
+    `verbatim: false` và không được tính vào báo cáo, đúng những giá trị quan
+    trọng nhất của tài liệu.
+    """
+
+    label: SourcedValue
+    value: SourcedValue | None
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"label": self.label.value}
+
+        if self.value is None:
+            out["value"] = None
+            return out
+
+        out.update(self.value.to_json())
+        return out
+
+
+@dataclass
 class FontAudit:
     """Kết quả soát bảng ToUnicode của font.
 

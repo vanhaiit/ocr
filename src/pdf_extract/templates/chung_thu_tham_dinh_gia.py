@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..extract_text_with_coordinates import normalize
-from ..models import SourcedValue
+from ..models import LabelledValue, SourcedValue
 from ..parse_document_sections import DocumentSection, LineBlock, ParsedDocument
 from .chung_thu_field_names import (
     SECTION_NAMES,
@@ -77,7 +77,10 @@ class ChungThuThamDinhGiaTemplate:
                 for section in document.sections
             },
             "signatures": _render_signatures(document),
-            "page_footers": [value.to_json() for value in document.page_footers],
+            # Trả về SourcedValue, KHÔNG gọi to_json() ở đây: cổng nguồn gốc
+            # chỉ xác thực được node nó nhận ra, chuyển sẵn sang dict là cho giá
+            # trị đi vòng qua cổng.
+            "page_footers": list(document.page_footers),
             # Dữ liệu annotation: không nằm trong content stream nên phải lấy
             # bằng đường riêng, nếu không sẽ mất trắng.
             "form_fields": {f.name: f.value for f in context.form_fields},
@@ -115,17 +118,11 @@ def _render_block(block: LineBlock, *, section_number: str | None) -> dict[str, 
         name = field_name_for(section_number, entry.label.value)
         target, key = (fields, name) if name else (unmapped, slugify_label(entry.label.value))
 
-        payload: dict[str, Any] = {"label": entry.label.value}
-        if entry.value is not None:
-            payload.update(entry.value.to_json())
-        else:
-            # Nhãn không có giá trị (dòng dẫn cho danh sách bên dưới). Vẫn xuất
-            # ra để không mất thông tin là nhãn đó có mặt trong tài liệu.
-            payload.update({"value": None, "page": entry.label.page})
-            if entry.label.bbox is not None:
-                payload["bbox"] = entry.label.bbox.as_list()
-
-        target[key] = payload
+        # Trả về LabelledValue chứ không phải dict: cổng nguồn gốc chỉ xác thực
+        # được các node nó nhận ra, dựng dict ở đây là cho giá trị đi vòng qua
+        # cổng. Nhãn không có giá trị (dòng dẫn cho danh sách bên dưới) vẫn xuất
+        # ra để không mất thông tin là nhãn đó có mặt trong tài liệu.
+        target[key] = LabelledValue(label=entry.label, value=entry.value)
 
     return {
         "fields": fields,
@@ -136,8 +133,31 @@ def _render_block(block: LineBlock, *, section_number: str | None) -> dict[str, 
 
 
 def _render_asset_table(tables: list) -> dict[str, Any]:
-    """Bảng mục X: các thửa đất và các dòng tổng."""
-    return {"rows": _asset_rows(tables), "totals": _totals(tables)}
+    """Bảng mục X: tiêu đề cột, các thửa đất, và các dòng tổng.
+
+    Tiêu đề cột cũng là dữ liệu của tài liệu (nó cho biết đơn vị: "Diện tích
+    (m2)", "Thành tiền (đồng)"), nên phải xuất ra chứ không chỉ dùng để bỏ qua.
+    """
+    return {
+        "columns": _column_headers(tables),
+        "rows": _asset_rows(tables),
+        "totals": _totals(tables),
+    }
+
+
+def _column_headers(tables: list) -> list[Any]:
+    """Hàng tiêu đề của bảng: hàng đầu tiên mà ô số thứ tự KHÔNG phải chữ số."""
+    for table in tables:
+        if table.shape[1] != ASSET_TABLE_COLUMN_COUNT:
+            continue
+
+        for row in table.rows:
+            filled = [cell for cell in row if cell.value.strip()]
+            if len(filled) < 2 or row[0].value.strip().isdigit():
+                continue
+            return list(filled)
+
+    return []
 
 
 def _asset_rows(tables: list) -> list[dict[str, Any]]:
@@ -194,7 +214,14 @@ def _totals(tables: list) -> dict[str, Any]:
             if name is None or totals[name] is not None:
                 continue
 
-            totals[name] = _total_row_value(row, first)
+            # Giữ cả nhãn tiếng Việt: nó mang đơn vị ("Tổng cộng (đồng)") nên
+            # là dữ liệu, không phải chỉ là mốc để nhận ra dòng.
+            totals[name] = LabelledValue(
+                label=SourcedValue(
+                    value=first.split(":")[0].strip(), page=row[0].page, bbox=row[0].bbox
+                ),
+                value=_total_row_value(row, first),
+            )
 
     return totals
 
@@ -244,7 +271,8 @@ def _signature_from_column(column: list[SourcedValue]) -> dict[str, Any]:
         "role_label": None,
         "card_number": None,
         "name": None,
-        "lines": [value.to_json() for value in column],
+        # Giữ SourcedValue để cổng nguồn gốc xác thực; xem ghi chú ở page_footers.
+        "lines": list(column),
     }
 
     for value in column:
