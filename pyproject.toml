@@ -1,0 +1,23 @@
+[project]
+name = "pdf-extract"
+version = "0.1.0"
+description = "PDF có text layer sang JSON, mọi giá trị kèm bằng chứng nguồn gốc"
+requires-python = ">=3.11"
+dependencies = ["pdfplumber>=0.11", "pypdf>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+pdf-extract = "pdf_extract.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+.venv/
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Rác của macOS
+.DS_Store
+
+# Sinh ra khi cài editable (pip install -e)
+*.egg-info/
