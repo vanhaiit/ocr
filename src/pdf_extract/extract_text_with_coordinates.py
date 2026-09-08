@@ -21,6 +21,13 @@ import pdfplumber
 # khoảng cách giữa hai dòng liền nhau (thường từ 1.15 lần cỡ chữ trở lên).
 LINE_CLUSTER_RATIO = 0.3
 
+# Tỉ lệ chồng lấn dọc tối thiểu để một ký tự thuộc cùng dòng với ký tự lớn nhất
+# của dòng đó. Cần cho CHỈ SỐ TRÊN/DƯỚI: chúng nhỏ hơn và lệch đường cơ sở nên
+# tâm nằm ngoài ngưỡng gom theo tâm, nhưng hộp của chúng vẫn chồng lên dải chữ
+# chính. Không có phép này thì "H₂O" bị tách thành "HO" và "2" ở hai dòng, rồi
+# ghép lại sai thành "HO 2".
+MIN_VERTICAL_OVERLAP_RATIO = 0.35
+
 # Khoảng trắng ngang tối thiểu để coi là ngắt cột thay vì khoảng cách chữ.
 # Dấu cách thường rộng khoảng 0.25-0.35 lần cỡ chữ, nên ngưỡng này tương đương
 # khoảng hai dấu cách liền nhau.
@@ -192,17 +199,27 @@ def group_chars_into_lines(chars: list[PositionedChar]) -> list[TextLine]:
         # Ngưỡng gom dòng tính theo cỡ chữ của chính trang đó.
         tolerance = median_font_size(page_chars) * LINE_CLUSTER_RATIO
         buckets: list[list[PositionedChar]] = []
+        # Ký tự lớn nhất của mỗi nhóm, dùng làm mốc so — nó đại diện dải chữ
+        # chính của dòng, còn chỉ số trên/dưới thì nhỏ và lệch khỏi dải đó.
+        anchors: list[PositionedChar] = []
 
         for c in page_chars:
             placed = False
-            for bucket in buckets:
-                # So tâm dọc để chịu được chữ khác cỡ trên cùng một dòng.
-                if abs(_vertical_center(bucket[0]) - _vertical_center(c)) <= tolerance:
+            for index, bucket in enumerate(buckets):
+                anchor = anchors[index]
+                same_line = (
+                    abs(_vertical_center(anchor) - _vertical_center(c)) <= tolerance
+                    or _vertical_overlap_ratio(anchor, c) >= MIN_VERTICAL_OVERLAP_RATIO
+                )
+                if same_line:
                     bucket.append(c)
+                    if c.size > anchor.size:
+                        anchors[index] = c
                     placed = True
                     break
             if not placed:
                 buckets.append([c])
+                anchors.append(c)
 
         for bucket in buckets:
             bucket.sort(key=lambda c: c.x0)
@@ -224,6 +241,20 @@ def group_chars_into_lines(chars: list[PositionedChar]) -> list[TextLine]:
 
 def _vertical_center(c: PositionedChar) -> float:
     return (c.top + c.bottom) / 2.0
+
+
+def _vertical_overlap_ratio(anchor: PositionedChar, other: PositionedChar) -> float:
+    """Phần chồng lấn dọc giữa hai ký tự, chia theo chiều cao ký tự NHỎ hơn.
+
+    Chia theo ký tự nhỏ hơn để chỉ số trên/dưới — vốn chỉ cao khoảng 60% chữ
+    thường — vẫn đạt tỉ lệ cao khi nó nằm trong dải chữ chính.
+    """
+    overlap = min(anchor.bottom, other.bottom) - max(anchor.top, other.top)
+    if overlap <= 0:
+        return 0.0
+
+    shorter = min(anchor.bottom - anchor.top, other.bottom - other.top)
+    return overlap / shorter if shorter > 0 else 0.0
 
 
 def canonical_text(lines: list[TextLine]) -> str:

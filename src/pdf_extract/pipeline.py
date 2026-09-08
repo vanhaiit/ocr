@@ -36,6 +36,7 @@ from .extract_text_with_coordinates import (
 )
 from .models import ExtractionResult, ExtractionStatus, PdfClass
 from .provenance_gate import apply_gate
+from .parse_document_sections import DATA_TABLE_MIN_COLUMNS, parse_document
 from .reconstruct_tables_by_ruling_lines import extract_tables, merge_continued_tables
 from .templates.template_base import DocumentContext
 from .templates.template_registry import detect_template, extract_with_template
@@ -126,7 +127,20 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
     # Bước 6: dựng bảng theo đường kẻ ô.
     # Nội dung ô lấy từ `chars` đã lọc glyph và gộp dấu, không để thư viện đọc
     # lại PDF — nếu không, ô bảng sẽ bỏ qua các bước xử lý ở tầng trên.
-    tables = merge_continued_tables(extract_tables(pdf_path, chars))
+    table_regions = extract_tables(pdf_path, chars)
+    tables = merge_continued_tables(table_regions)
+
+    # Bước 6b: đọc cấu trúc mục của tài liệu. Loại các vùng bảng DỮ LIỆU khỏi
+    # parser cấu trúc (dùng vùng CHƯA ghép qua trang, vì bản đã ghép chỉ giữ
+    # bbox trang đầu) — bảng đã được dựng theo biên ô ở bước trên.
+    parsed = parse_document(
+        lines,
+        [
+            (region.page, region.bbox)
+            for region in table_regions
+            if region.shape[1] >= DATA_TABLE_MIN_COLUMNS
+        ],
+    )
 
     # Cổng 7: nhận diện template.
     template, confidence = detect_template(canonical)
@@ -151,7 +165,11 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
     raw_data = extract_with_template(
         template,
         DocumentContext(
-            lines=lines, tables=tables, form_fields=form_fields, hyperlinks=hyperlinks
+            lines=lines,
+            tables=tables,
+            document=parsed,
+            form_fields=form_fields,
+            hyperlinks=hyperlinks,
         ),
     )
 

@@ -74,7 +74,10 @@ def _draw_header(builder: CertificatePdfBuilder) -> None:
     builder.draw_text(360.0, EXPECTED["issue_place_and_date"])
     builder.newline(2)
     builder.draw_text(170.0, "CHỨNG THƯ THẨM ĐỊNH GIÁ", emphasis="bold", size=15.0)
-    builder.newline(2)
+    builder.newline()
+    # Dòng "Kính gửi" nằm ngoài mọi mục La Mã, thuộc phần mở đầu.
+    builder.draw_text(LABEL_X, f"Kính gửi: {EXPECTED['recipient']}")
+    builder.newline()
 
 
 def _draw_customer_section(builder: CertificatePdfBuilder) -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from certificate_json_paths import FIELD_PATHS, asset_rows, field_value, node_at
 from pdf_extract.classify_pdf_text_layer import rejection_reason
 from pdf_extract.extract_text_with_coordinates import (
     canonical_text,
@@ -126,18 +127,18 @@ def test_numeric_cells_join_without_space(result):
     """
     extraction, _ = result
 
-    for row in extraction.data["assets_valued"]:
+    for row in asset_rows(extraction.data):
         assert " " not in row["amount_vnd"]["value"], row["amount_vnd"]["value"]
         assert " " not in row["area_sqm"]["value"], row["area_sqm"]["value"]
 
     for key in ("total", "total_rounded"):
-        assert " " not in extraction.data["totals"][key]["value"]
+        assert " " not in (field_value(extraction.data, key) or "")
 
 
 def test_prose_cells_keep_word_boundaries(result):
     """Ô văn xuôi bị ngắt dòng phải ghép CÓ dấu cách, không dính chữ."""
     extraction, _ = result
-    description = extraction.data["assets_valued"][0]["description"]["value"]
+    description = asset_rows(extraction.data)[0]["description"]["value"]
 
     assert "dụng đất" in description, description
     assert "dụngđất" not in description
@@ -168,7 +169,7 @@ def test_status_is_verified(result):
 def test_asset_table_row_count_and_sequence(result):
     """Bảng mục X phải ra đủ số thửa và số thứ tự liên tục từ 1."""
     extraction, name = result
-    rows = extraction.data["assets_valued"]
+    rows = asset_rows(extraction.data)
 
     assert len(rows) == EXPECTED_ASSET_ROW_COUNT[name]
     assert [row["index"] for row in rows] == list(range(1, len(rows) + 1))
@@ -178,7 +179,7 @@ def test_asset_rows_have_all_columns_populated(result):
     """Mỗi thửa phải có đủ mô tả, diện tích, thành tiền — không ô nào rỗng."""
     extraction, _ = result
 
-    for row in extraction.data["assets_valued"]:
+    for row in asset_rows(extraction.data):
         for column in ("description", "area_sqm", "amount_vnd"):
             assert row[column] is not None, f"Thiếu cột {column} ở thửa {row['index']}"
             assert row[column]["value"].strip(), f"Cột {column} rỗng ở thửa {row['index']}"
@@ -187,33 +188,16 @@ def test_asset_rows_have_all_columns_populated(result):
 
 def test_no_required_field_is_null(result):
     """Các field cốt lõi của chứng thư phải bóc được, không được null."""
-    extraction, _ = result
-    data = extraction.data
+    extraction, name = result
 
-    required = [
-        data["certificate"]["contract_number"],
-        data["certificate"]["certificate_number"],
-        data["customer"]["name"],
-        data["customer"]["address"],
-        data["customer"]["identity_number"],
-        data["valuation_company"]["company_branch"],
-        data["valuation_company"]["company_tax_id"],
-        data["asset"]["asset_type"],
-        data["asset"]["asset_under_valuation"],
-        data["valuation"]["valuation_date"],
-        data["valuation"]["purpose"],
-        data["totals"]["total"],
-        data["totals"]["total_rounded"],
-        data["totals"]["total_in_words"],
-    ]
-
-    assert all(field is not None for field in required)
+    for key in FIELD_PATHS:
+        assert field_value(extraction.data, key), f"{name}: thiếu {key}"
 
 
 def test_values_carry_page_and_bbox(result):
     """Bằng chứng nguồn gốc phải đi kèm từng giá trị, không chỉ ở mức tổng."""
     extraction, _ = result
-    name_field = extraction.data["customer"]["name"]
+    name_field = node_at(extraction.data, ("sections", "I", "fields", "customer_name"))
 
     assert name_field["page"] >= 1
     assert len(name_field["bbox"]) == 4
@@ -222,7 +206,7 @@ def test_values_carry_page_and_bbox(result):
 def test_multiline_value_is_joined_completely(result):
     """Giá trị vắt qua nhiều dòng phải được ghép đủ, không bị cắt giữa câu."""
     extraction, _ = result
-    purpose = extraction.data["valuation"]["purpose"]["value"]
+    purpose = field_value(extraction.data, "purpose")
 
     assert "cấp tín dụng" in purpose, f"Mục đích bị cắt: {purpose!r}"
 

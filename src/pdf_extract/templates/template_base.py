@@ -27,6 +27,7 @@ from ..extract_text_with_coordinates import (
     segment_text,
 )
 from ..extract_annotation_data import FormField, Hyperlink
+from ..parse_document_sections import ParsedDocument
 from ..models import BoundingBox, SourcedValue
 
 # Các dấu phân cách nhãn/giá trị dùng trong họ tài liệu này.
@@ -48,6 +49,9 @@ class DocumentContext:
 
     lines: list[TextLine]
     tables: list
+    # Cấu trúc mục đã đọc từ tài liệu. Template dựa vào đây để không phải đi
+    # tìm nhãn — nhờ vậy nhãn lạ vẫn được xuất ra thay vì bỏ im lặng.
+    document: ParsedDocument = field(default_factory=ParsedDocument)
     form_fields: list[FormField] = field(default_factory=list)
     hyperlinks: list[Hyperlink] = field(default_factory=list)
 

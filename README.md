@@ -58,7 +58,83 @@ PYTHONPATH=src:tests ./.venv/bin/python3 -m fixtures.generate_font_feature_sampl
 
 **Chữ ẩn** (chế độ tô 3) không hiện trên màn hình nhưng engine vẫn đọc, nên có thể lẫn vào dữ liệu. **Watermark** cỡ lớn nằm chéo trang khiến tâm glyph rơi vào trong ô bảng. Cả hai là dạng sai âm thầm tệ nhất: giá trị vẫn *nguyên văn của PDF* nên cổng nguồn gốc không bắt được — phải xử lý bằng tầng riêng và test riêng.
 
+**Chỉ số trên/dưới nằm lệch đường cơ sở** nên bị gom thành dòng riêng —
+`H₂O` từng bị đọc thành `HO` rồi `2` ở hai dòng, ghép lại sai thành `HO 2`.
+Xử lý bằng cách gom dòng theo **chồng lấn dọc** với ký tự lớn nhất của dòng,
+không chỉ theo tâm ký tự.
+
 **Tiếng Việt dạng NFD**: `ồ` được lưu thành `o` + dấu mũ + dấu huyền, mỗi dấu là một glyph. Chuẩn hoá NFC trên *từng ký tự* không ghép được gì — phải gộp dấu tổ hợp vào ký tự gốc trước.
+
+## Cấu trúc JSON
+
+JSON theo đúng cấu trúc tài liệu. **Không có danh sách field định trước** — cấu
+trúc được đọc từ chính tài liệu (số La Mã, gạch đầu dòng, dấu hai chấm), rồi mới
+gán tên tiếng Anh. Nhờ vậy nhãn nào chưa có tên vẫn xuất ra trong
+`unmapped_fields` thay vì bị bỏ im lặng.
+
+```json
+{
+  "preface": {                       // trước mục I: tiêu đề thư, quốc hiệu, "Kính gửi", "Căn cứ"
+    "fields":  { "contract_number": {...}, "certificate_number": {...}, "recipient": {...} },
+    "unmapped_fields": {},
+    "paragraphs": [ ... ],           // quốc hiệu, địa điểm/ngày, tên chứng thư
+    "items": [ ... ]                 // các dòng "- Căn cứ ..."
+  },
+  "sections": {                      // khóa bằng SỐ LA MÃ như tài liệu
+    "I": {
+      "name": "customer_info",       // tên tiếng Anh của mục
+      "title": { "value": "THÔNG TIN KHÁCH HÀNG", ... },
+      "fields": {
+        "customer_name": {
+          "label": "Tên khách hàng", // nhãn NGUYÊN VĂN trong tài liệu
+          "value": "ÔNG: CUSTOMER-NAME-001",
+          "page": 1, "bbox": [206.4, 308.04, 372.61, 320.04], "verbatim": true
+        },
+        "customer_address": {...}, "customer_identity_number": {...}
+      },
+      "unmapped_fields": {},         // nhãn chưa ánh xạ, khóa tự sinh từ nhãn
+      "paragraphs": [], "items": []
+    },
+    "IV": { "name": "valuation_date", "value": {...} },   // giá trị sau dấu ":" của tiêu đề mục
+    "X":  { "name": "asset_values", "table": { "rows": [...], "totals": {...} } },
+    "XIII": { "name": "attached_documents", "fields": {...}, "items": [...] }
+  },
+  "signatures": [                    // gom theo CỘT, mỗi người một object
+    { "role": "valuer",           "role_label": "THẨM ĐỊNH VIÊN VỀ GIÁ",
+      "card_number": {...}, "name": {...}, "lines": [...] },
+    { "role": "branch_director",  "role_label": "GIÁM ĐỐC CHI NHÁNH", ... }
+  ],
+  "page_footers": [ ... ],
+  "form_fields": { ... },            // AcroForm: giá trị trong /V
+  "hyperlinks": [ ... ]              // URL trong /A /URI
+}
+```
+
+Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 16 field trong các mục,
+5 thửa đất, 3 dòng tổng, 2 người ký, 3 chân trang — **58/58 giá trị chứng minh
+được là nguyên văn**, không nhãn nào chưa ánh xạ.
+
+### Vì sao phải đọc cấu trúc trước, đặt tên sau
+
+Bản đầu tiên làm ngược: template đi tìm một danh sách 17 nhãn định trước. Mọi
+thứ ngoài danh sách bị bỏ **im lặng** — mất `Kính gửi`, ba dòng `Căn cứ`, quốc
+hiệu, toàn bộ mục VI–IX, mục XII, mục XIII kèm danh sách phụ lục, phần
+"Một số lưu ý", và cả khối chữ ký.
+
+Giờ `parse_document_sections` đọc cấu trúc trước và **không biết gì về nghiệp
+vụ**; template chỉ làm việc đặt tên. Ánh xạ thiếu không còn làm mất dữ liệu.
+
+### Ba quy tắc nhận dạng, đều dựa trên dữ liệu có sẵn trong PDF
+
+| Câu hỏi | Cách quyết |
+|---|---|
+| Dòng nối tiếp thuộc **nhãn** hay **giá trị**? | Theo toạ độ: gần cột nhãn hay gần cột giá trị hơn (`Hồ sơ pháp lý khách` + `hàng cung cấp` là nhãn; `với đất thuộc...` là giá trị) |
+| Dòng có phải **nhãn mới**? | Phải bắt đầu bằng chữ HOA hoặc chữ số. Phần cuối câu bị ngắt dòng bắt đầu bằng chữ thường (`tại thời điểm... như sau:`) nên không bị nhận nhầm |
+| Dòng có **nối tiếp** dòng trước? | Phải liền kề theo chiều dọc và cùng trang. Hai câu nằm trước/sau một bảng không được nối — dòng bảng đã bị loại nên chúng trông như liền nhau |
+
+Khối chữ ký nhận ra bằng "nhiều cột + thụt xa lề", dò từ dòng cuối lên — không
+theo số trang, vì khối này có thể vắt qua hai trang (vai trò và số thẻ ở trang
+trước, họ tên ở trang sau).
 
 ## Chín cổng kiểm tra
 
@@ -168,6 +244,9 @@ src/pdf_extract/
 ├── extract_annotation_data.py            # form field + hyperlink
 ├── cross_verify_engines.py               # cổng 5
 ├── reconstruct_tables_by_ruling_lines.py # cổng 6
+├── parse_labeled_lines.py                # nhận dạng "nhãn : giá trị"
+├── parse_document_sections.py            # đọc cấu trúc mục (độc lập nghiệp vụ)
+├── sourced_value_builders.py             # nguyên thuỷ dựng SourcedValue
 ├── provenance_gate.py                    # cổng 9
 ├── pipeline.py                            # điều phối
 ├── cli.py
@@ -198,7 +277,7 @@ Pipeline không cần sửa. Tài liệu không khớp mẫu nào bị từ ch�
 ## Test
 
 ```bash
-./.venv/bin/pytest -q      # 209 test
+./.venv/bin/pytest -q      # 221 test
 ```
 
 Test kiểm đúng những điều đã cam kết, không kiểm "chạy được": không mất ký tự giữa các engine, phủ `ToUnicode` 100%, mọi giá trị truy được về nguồn, số dòng bảng và thứ tự STT, và — quan trọng nhất — cổng nguồn gốc thật sự chặn được giá trị bịa cùng giá trị bị sửa một ký tự.
@@ -254,6 +333,7 @@ Nếu file này vốn định làm mẫu thật thì cần sinh lại bằng fon
 
 1. **Template tiếp theo**: báo cáo thẩm định giá, hợp đồng, hay loại nào? Mỗi loại cần vài file mẫu để chốt danh sách nhãn.
 2. **Ngưỡng nhận diện template** đang là 0.6. Cần nới hay thắt tuỳ mức khác biệt giữa các biến thể thật.
-3. **Cột nào là văn xuôi** trong các template sau: hiện phải khai báo tay bằng `rejoin_prose_cell()`. Với vài template thì ổn; nhiều hơn thì nên gắn kiểu cột vào khai báo template.
-4. **Ngưỡng tách chữ trang trí** đang là `2.2 × cỡ chữ trung vị`. Watermark thật thường 3–5 lần, tiêu đề lớn nhất trong chứng thư 1.25 lần — khoảng cách rộng, nhưng cần xác nhận trên tài liệu thật có watermark.
-5. **Trạng thái cho lỗi hỏng ký tự**: hiện là `needs_review` (vẫn xuất dữ liệu, mã thoát 1). Có nên nâng lên `rejected` không? Lập luận cho việc nâng: khi cổng 2 hoặc cổng 5 đỏ thì text *đã biết là sai*, khác về bản chất với "bóc thiếu field". Lập luận giữ nguyên: vẫn cần thấy dữ liệu để soi lỗi. CI hiện có thể tự chặn bằng `font_audit.coverage < 1` hoặc `char_multiset_match == false`.
+3. **Nhãn mới của các bản chứng thư khác** sẽ rơi vào `unmapped_fields` — cần rà định kỳ để bổ sung tên tiếng Anh vào `chung_thu_field_names.py`. Hai file mẫu hiện tại không còn nhãn nào chưa ánh xạ.
+4. **Cột nào là văn xuôi** trong các template sau: hiện phải khai báo tay bằng `rejoin_prose_cell()`. Với vài template thì ổn; nhiều hơn thì nên gắn kiểu cột vào khai báo template.
+5. **Ngưỡng tách chữ trang trí** đang là `2.2 × cỡ chữ trung vị`. Watermark thật thường 3–5 lần, tiêu đề lớn nhất trong chứng thư 1.25 lần — khoảng cách rộng, nhưng cần xác nhận trên tài liệu thật có watermark.
+6. **Trạng thái cho lỗi hỏng ký tự**: hiện là `needs_review` (vẫn xuất dữ liệu, mã thoát 1). Có nên nâng lên `rejected` không? Lập luận cho việc nâng: khi cổng 2 hoặc cổng 5 đỏ thì text *đã biết là sai*, khác về bản chất với "bóc thiếu field". Lập luận giữ nguyên: vẫn cần thấy dữ liệu để soi lỗi. CI hiện có thể tự chặn bằng `font_audit.coverage < 1` hoặc `char_multiset_match == false`.

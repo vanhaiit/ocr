@@ -1,23 +1,30 @@
 """Template: Chứng thư thẩm định giá (bất động sản).
 
-Bóc theo nhãn có thật trong tài liệu, ứng với các mục I..XIII của chứng thư.
-Không dùng vị trí tuyệt đối, không dùng LLM — mọi giá trị đều là chuỗi cắt ra
-từ text đã trích xuất xác định, nên đi qua được cổng nguồn gốc.
+Nhận cấu trúc đã đọc từ `parse_document_sections` rồi gán tên tiếng Anh. Vai trò
+của template chỉ là ĐẶT TÊN và gom bảng — không đi tìm nhãn, nên không thể bỏ
+sót: nhãn nào chưa có tên tiếng Anh vẫn xuất ra trong `unmapped_fields`.
+
+Đây là điểm khác so với bản đầu: trước đây template đi tìm một danh sách nhãn
+định trước nên mọi thứ ngoài danh sách bị bỏ im lặng — mất cả "Kính gửi", các
+dòng "Căn cứ", mục VI đến IX, mục XII, XIII và khối chữ ký.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..extract_text_with_coordinates import TextLine, normalize
+from ..extract_text_with_coordinates import normalize
 from ..models import SourcedValue
-from .template_base import (
-    DocumentContext,
-    rejoin_prose_cell,
-    segment_value_containing,
-    value_after_label,
-    value_from_table_lookup,
+from ..parse_document_sections import DocumentSection, LineBlock, ParsedDocument
+from .chung_thu_field_names import (
+    SECTION_NAMES,
+    SIGNATURE_CARD_LABEL,
+    comparable_label,
+    field_name_for,
+    signature_role_for,
+    slugify_label,
 )
+from .template_base import DocumentContext, rejoin_prose_cell
 
 TEMPLATE_ID = "chung_thu_tham_dinh_gia"
 
@@ -30,46 +37,19 @@ SIGNATURE_PHRASES = (
     "GIÁ TRỊ TÀI SẢN THẨM ĐỊNH GIÁ",
 )
 
-# Nhãn dòng đơn: tên field JSON -> nhãn xuất hiện trong tài liệu.
-SINGLE_LINE_LABELS = {
-    "contract_number": "Số HĐ",
-    "certificate_number": "Số CTPH",
-    "customer_name": "Tên khách hàng",
-    "customer_address": "Địa chỉ",
-    "asset_type": "Loại hình tài sản",
-    "valuation_date": "THỜI ĐIỂM THẨM ĐỊNH GIÁ",
-    "valuation_purpose": "MỤC ĐÍCH THẨM ĐỊNH GIÁ",
-}
-
-# Nhãn nằm trong bảng hai cột ở mục II.
-COMPANY_TABLE_LABELS = {
-    "company_branch": "Đơn vị thực hiện",
-    "company_address": "Địa chỉ",
-    "company_tax_id": "Mã số thuế",
-    "company_representative": "Đại diện",
-}
-
-# Nhãn giấy tờ định danh khách hàng — tài liệu dùng lẫn "CCCD" và "CCCD/MST".
-CUSTOMER_ID_LABELS = ("CCCD/MST", "CCCD")
-
-# Nhãn các dòng tổng ở cuối bảng giá trị.
-TOTAL_ROW_LABELS = {
-    "total": "Tổng cộng",
-    "total_rounded": "Làm tròn",
-    "total_in_words": "Bằng chữ",
-}
-
-# Cụm mốc cho các field không theo khuôn "nhãn: giá trị".
-ISSUE_PLACE_MARKER = "TP.HCM"
-
-# Nhãn tài sản thẩm định — giá trị dài, thường vắt qua nhiều dòng.
-# Giữ gạch đầu dòng để không khớp nhầm tiêu đề mục III
-# ("THÔNG TIN VỀ TÀI SẢN THẨM ĐỊNH GIÁ") vốn chứa cùng cụm từ.
-ASSET_LABEL = "- Tài sản thẩm định"
-VALIDITY_MARKER = "tính từ ngày phát hành là"
+# Mục chứa bảng giá trị tài sản.
+ASSET_TABLE_SECTION = "X"
 
 # Bảng giá trị tài sản có 4 cột: STT | Tên tài sản | Diện tích | Thành tiền.
 ASSET_TABLE_COLUMN_COUNT = 4
+
+# Nhãn các dòng tổng ở cuối bảng giá trị, so theo TIỀN TỐ vì nhãn thật còn kèm
+# đơn vị trong ngoặc ("Tổng cộng (đồng)").
+TOTAL_ROW_LABEL_PREFIXES = {
+    "tong cong": "total",
+    "lam tron": "total_rounded",
+    "bang chu": "total_in_words",
+}
 
 
 class ChungThuThamDinhGiaTemplate:
@@ -87,155 +67,203 @@ class ChungThuThamDinhGiaTemplate:
         return hits / len(SIGNATURE_PHRASES)
 
     def extract(self, context: DocumentContext) -> dict[str, Any]:
-        """Bóc toàn bộ field của chứng thư."""
-        lines, tables = context.lines, context.tables
+        """Dựng JSON theo đúng cấu trúc mục của tài liệu."""
+        document = context.document
 
         return {
-            "certificate": self._extract_header_fields(lines),
-            "customer": self._extract_customer(lines),
-            "valuation_company": self._extract_company(lines, tables),
-            "asset": self._extract_asset_info(lines),
-            "valuation": self._extract_valuation_meta(lines),
-            "assets_valued": self._extract_asset_rows(tables),
-            "totals": self._extract_totals(tables),
-            "validity_months": self._extract_validity(lines),
+            "preface": _render_block(document.preface, section_number=None),
+            "sections": {
+                section.number: _render_section(section, context)
+                for section in document.sections
+            },
+            "signatures": _render_signatures(document),
+            "page_footers": [value.to_json() for value in document.page_footers],
             # Dữ liệu annotation: không nằm trong content stream nên phải lấy
             # bằng đường riêng, nếu không sẽ mất trắng.
-            "form_fields": self._extract_form_fields(context),
-            "hyperlinks": self._extract_hyperlinks(context),
+            "form_fields": {f.name: f.value for f in context.form_fields},
+            "hyperlinks": [
+                SourcedValue(value=link.url, page=link.page, bbox=link.bbox)
+                for link in context.hyperlinks
+            ],
         }
 
-    def _extract_form_fields(self, context: DocumentContext) -> dict[str, Any]:
-        """Giá trị các ô điền thông tin, khoá theo tên field trong AcroForm."""
-        return {field.name: field.value for field in context.form_fields}
 
-    def _extract_hyperlinks(self, context: DocumentContext) -> list[Any]:
-        """URL của các liên kết, kèm trang và vùng toạ độ."""
-        return [
-            SourcedValue(value=link.url, page=link.page, bbox=link.bbox)
-            for link in context.hyperlinks
-        ]
+def _render_section(section: DocumentSection, context: DocumentContext) -> dict[str, Any]:
+    """Một mục: tiêu đề nguyên văn, tên tiếng Anh, các field, đoạn văn, mục liệt kê."""
+    rendered: dict[str, Any] = {
+        "name": SECTION_NAMES.get(section.number),
+        "title": section.title,
+        **_render_block(section.block, section_number=section.number),
+    }
 
-    def _extract_header_fields(self, lines: list[TextLine]) -> dict[str, Any]:
-        return {
-            "contract_number": value_after_label(lines, SINGLE_LINE_LABELS["contract_number"]),
-            "certificate_number": value_after_label(lines, SINGLE_LINE_LABELS["certificate_number"]),
-            # Dòng địa điểm/ngày không theo khuôn "nhãn: giá trị", lấy cả đoạn.
-            "issue_place_and_date": segment_value_containing(lines, ISSUE_PLACE_MARKER),
-        }
+    if section.inline_value is not None:
+        # Giá trị viết ngay sau dấu hai chấm của tiêu đề mục (mục IV, V).
+        rendered["value"] = section.inline_value
 
-    def _extract_customer(self, lines: list[TextLine]) -> dict[str, Any]:
-        customer_id = None
-        for label in CUSTOMER_ID_LABELS:
-            customer_id = value_after_label(lines, label)
-            if customer_id is not None:
-                break
+    if section.number == ASSET_TABLE_SECTION:
+        rendered["table"] = _render_asset_table(context.tables)
 
-        return {
-            "name": value_after_label(lines, SINGLE_LINE_LABELS["customer_name"]),
-            "address": value_after_label(lines, SINGLE_LINE_LABELS["customer_address"]),
-            "identity_number": customer_id,
-        }
+    return rendered
 
-    def _extract_company(self, lines: list[TextLine], tables: list) -> dict[str, Any]:
-        """Mục II trình bày bằng bảng hai cột; rơi về tra theo dòng nếu bảng vắng."""
-        result: dict[str, Any] = {}
 
-        for field_name, label in COMPANY_TABLE_LABELS.items():
-            value = value_from_table_lookup(tables, label)
-            if value is None:
-                value = value_after_label(lines, label)
-            result[field_name] = value
+def _render_block(block: LineBlock, *, section_number: str | None) -> dict[str, Any]:
+    """Gán tên cho từng field; nhãn chưa ánh xạ đi vào `unmapped_fields`."""
+    fields: dict[str, Any] = {}
+    unmapped: dict[str, Any] = {}
 
-        return result
+    for entry in block.fields:
+        name = field_name_for(section_number, entry.label.value)
+        target, key = (fields, name) if name else (unmapped, slugify_label(entry.label.value))
 
-    def _extract_asset_info(self, lines: list[TextLine]) -> dict[str, Any]:
-        return {
-            "asset_type": value_after_label(lines, SINGLE_LINE_LABELS["asset_type"]),
-            "asset_under_valuation": value_after_label(
-                lines, ASSET_LABEL, multiline=True
-            ),
-        }
+        payload: dict[str, Any] = {"label": entry.label.value}
+        if entry.value is not None:
+            payload.update(entry.value.to_json())
+        else:
+            # Nhãn không có giá trị (dòng dẫn cho danh sách bên dưới). Vẫn xuất
+            # ra để không mất thông tin là nhãn đó có mặt trong tài liệu.
+            payload.update({"value": None, "page": entry.label.page})
+            if entry.label.bbox is not None:
+                payload["bbox"] = entry.label.bbox.as_list()
 
-    def _extract_valuation_meta(self, lines: list[TextLine]) -> dict[str, Any]:
-        return {
-            "valuation_date": value_after_label(lines, SINGLE_LINE_LABELS["valuation_date"]),
-            "purpose": value_after_label(
-                lines, SINGLE_LINE_LABELS["valuation_purpose"], multiline=True
-            ),
-        }
+        target[key] = payload
 
-    def _extract_asset_rows(self, tables: list) -> list[dict[str, Any]]:
-        """Bóc các dòng thửa đất từ bảng 4 cột ở mục X.
+    return {
+        "fields": fields,
+        "unmapped_fields": unmapped,
+        "paragraphs": list(block.paragraphs),
+        "items": list(block.items),
+    }
 
-        Chỉ nhận dòng có cột STT là số — cách này loại tự nhiên các dòng tiêu đề
-        và các dòng tổng, không cần đoán theo chỉ số dòng.
-        """
-        rows: list[dict[str, Any]] = []
 
-        for table in tables:
-            if table.shape[1] != ASSET_TABLE_COLUMN_COUNT:
+def _render_asset_table(tables: list) -> dict[str, Any]:
+    """Bảng mục X: các thửa đất và các dòng tổng."""
+    return {"rows": _asset_rows(tables), "totals": _totals(tables)}
+
+
+def _asset_rows(tables: list) -> list[dict[str, Any]]:
+    """Các dòng thửa đất từ bảng 4 cột.
+
+    Chỉ nhận dòng có cột STT là số — cách này loại tự nhiên dòng tiêu đề và các
+    dòng tổng, không cần đoán theo chỉ số dòng.
+    """
+    rows: list[dict[str, Any]] = []
+
+    for table in tables:
+        if table.shape[1] != ASSET_TABLE_COLUMN_COUNT:
+            continue
+
+        for row in table.rows:
+            index_cell = row[0].value.strip()
+            if not index_cell.isdigit():
                 continue
 
-            for row in table.rows:
-                index_cell = row[0].value.strip()
-                if not index_cell.isdigit():
-                    continue
-
-                rows.append(
-                    {
-                        "index": int(index_cell),
-                        # Cột mô tả là văn xuôi -> ghép các dòng có dấu cách.
-                        # Hai cột còn lại là số/mã -> giữ cách ghép liền.
-                        "description": rejoin_prose_cell(row[1]),
-                        "area_sqm": row[2],
-                        "amount_vnd": row[3],
-                    }
-                )
-
-        return rows
-
-    def _extract_totals(self, tables: list) -> dict[str, Any]:
-        """Lấy các dòng tổng cộng / làm tròn / bằng chữ.
-
-        Dòng "Bằng chữ" gộp cả nhãn và giá trị trong một ô, nên phải cắt sau nhãn.
-        """
-        totals: dict[str, Any] = {key: None for key in TOTAL_ROW_LABELS}
-
-        for table in tables:
-            for row in table.rows:
-                if not row:
-                    continue
-
-                first = normalize(row[0].value).strip()
-
-                for field_name, label in TOTAL_ROW_LABELS.items():
-                    if totals[field_name] is not None:
-                        continue
-                    if not first.lower().startswith(label.lower()):
-                        continue
-
-                    totals[field_name] = self._value_for_total_row(row, first, label)
-
-        return totals
-
-    def _value_for_total_row(self, row: list[SourcedValue], first: str, label: str) -> SourcedValue | None:
-        """Giá trị của dòng tổng: ở ô kế tiếp, hoặc nằm cùng ô sau nhãn."""
-        for cell in row[1:]:
-            if cell.value.strip():
-                return cell
-
-        # Trường hợp "Bằng chữ: <giá trị>" nằm trong cùng một ô.
-        separator = first.find(":")
-        if separator != -1 and first[separator + 1:].strip():
-            return SourcedValue(
-                value=first[separator + 1:].strip(),
-                page=row[0].page,
-                bbox=row[0].bbox,
+            rows.append(
+                {
+                    "index": int(index_cell),
+                    # Cột mô tả là văn xuôi -> ghép các dòng có dấu cách.
+                    # Hai cột còn lại là số/mã -> giữ cách ghép liền.
+                    "description": rejoin_prose_cell(row[1]),
+                    "area_sqm": row[2],
+                    "amount_vnd": row[3],
+                }
             )
 
-        return None
+    return rows
 
-    def _extract_validity(self, lines: list[TextLine]) -> SourcedValue | None:
-        """Thời hạn hiệu lực nằm sau cụm mốc trong mục XI."""
-        return value_after_label(lines, VALIDITY_MARKER)
+
+def _totals(tables: list) -> dict[str, Any]:
+    """Các dòng tổng cộng / làm tròn / bằng chữ ở cuối bảng."""
+    totals: dict[str, Any] = {name: None for name in TOTAL_ROW_LABEL_PREFIXES.values()}
+
+    for table in tables:
+        for row in table.rows:
+            if not row:
+                continue
+
+            first = row[0].value.strip()
+            key = comparable_label(first.split(":")[0])
+            name = next(
+                (
+                    value
+                    for prefix, value in TOTAL_ROW_LABEL_PREFIXES.items()
+                    if key.startswith(prefix)
+                ),
+                None,
+            )
+
+            if name is None or totals[name] is not None:
+                continue
+
+            totals[name] = _total_row_value(row, first)
+
+    return totals
+
+
+def _total_row_value(row: list[SourcedValue], first_cell: str) -> SourcedValue | None:
+    """Giá trị của dòng tổng: ở ô kế tiếp, hoặc nằm cùng ô sau dấu hai chấm."""
+    for cell in row[1:]:
+        if cell.value.strip():
+            return cell
+
+    separator = first_cell.find(":")
+    if separator != -1 and first_cell[separator + 1:].strip():
+        return SourcedValue(
+            value=first_cell[separator + 1:].strip(), page=row[0].page, bbox=row[0].bbox
+        )
+
+    return None
+
+
+def _render_signatures(document: ParsedDocument) -> list[dict[str, Any]]:
+    """Khối chữ ký: gom theo CỘT để mỗi người thành một object.
+
+    Khối này xếp hai người cạnh nhau — vai trò, số thẻ, "(Ký tên)", rồi họ tên,
+    mỗi thứ một dòng. Đọc theo dòng thì hai người dính vào nhau, nên phải gom
+    theo cột: cột thứ i của mọi dòng thuộc cùng một người.
+    """
+    if not document.signature_columns:
+        return []
+
+    people = max(len(row) for row in document.signature_columns)
+    signatures: list[dict[str, Any]] = []
+
+    for index in range(people):
+        column = [row[index] for row in document.signature_columns if index < len(row)]
+        if not column:
+            continue
+
+        signatures.append(_signature_from_column(column))
+
+    return signatures
+
+
+def _signature_from_column(column: list[SourcedValue]) -> dict[str, Any]:
+    """Một người ký: vai trò, số thẻ, họ tên, cùng các dòng còn lại."""
+    entry: dict[str, Any] = {
+        "role": None,
+        "role_label": None,
+        "card_number": None,
+        "name": None,
+        "lines": [value.to_json() for value in column],
+    }
+
+    for value in column:
+        text = value.value
+        key = comparable_label(text)
+
+        if entry["role"] is None and signature_role_for(text) is not None:
+            entry["role"] = signature_role_for(text)
+            entry["role_label"] = text
+        elif key.startswith(SIGNATURE_CARD_LABEL) and ":" in text:
+            entry["card_number"] = SourcedValue(
+                value=text.split(":", 1)[1].strip(), page=value.page, bbox=value.bbox
+            )
+
+    # Họ tên là dòng cuối của cột: các dòng trên đã là vai trò, số thẻ, chỉ dẫn ký.
+    tail = column[-1]
+    if signature_role_for(tail.value) is None and not comparable_label(
+        tail.value
+    ).startswith(SIGNATURE_CARD_LABEL):
+        entry["name"] = tail
+
+    return entry

@@ -24,31 +24,11 @@ from fixtures.certificate_expected_values import (
     PORTAL_URL,
     WATERMARK_TEXT,
 )
+from certificate_json_paths import FIELD_PATHS, asset_rows, field_value, node_at
 from pdf_extract.models import ExtractionStatus
 from pdf_extract.pipeline import process_pdf
 
 FEATURES_DIR = Path(__file__).resolve().parent.parent / "samples" / "font-features"
-
-# Ánh xạ từ khoá ground truth sang đường dẫn trong cây JSON.
-FIELD_PATHS = {
-    "contract_number": ("certificate", "contract_number"),
-    "certificate_number": ("certificate", "certificate_number"),
-    "issue_place_and_date": ("certificate", "issue_place_and_date"),
-    "customer_name": ("customer", "name"),
-    "customer_address": ("customer", "address"),
-    "customer_id": ("customer", "identity_number"),
-    "company_branch": ("valuation_company", "company_branch"),
-    "company_address": ("valuation_company", "company_address"),
-    "company_tax_id": ("valuation_company", "company_tax_id"),
-    "company_representative": ("valuation_company", "company_representative"),
-    "asset_type": ("asset", "asset_type"),
-    "asset_under_valuation": ("asset", "asset_under_valuation"),
-    "valuation_date": ("valuation", "valuation_date"),
-    "purpose": ("valuation", "purpose"),
-    "total": ("totals", "total"),
-    "total_rounded": ("totals", "total_rounded"),
-    "total_in_words": ("totals", "total_in_words"),
-}
 
 # Biến thể có dữ liệu nằm trong annotation, cần đường trích xuất riêng.
 VARIANTS_WITH_FORM_FIELDS = ("07-form-fields.pdf", "12-kitchen-sink.pdf")
@@ -62,15 +42,6 @@ def variant_names() -> list[str]:
 @pytest.fixture(scope="module", params=variant_names())
 def extraction(request):
     return request.param, process_pdf(str(FEATURES_DIR / request.param))
-
-
-def _value_at(data: dict, path: tuple[str, ...]) -> str | None:
-    node = data
-    for key in path:
-        node = node.get(key) if isinstance(node, dict) else None
-        if node is None:
-            return None
-    return node.get("value") if isinstance(node, dict) else None
 
 
 def test_variant_set_is_complete():
@@ -98,10 +69,26 @@ def test_scalar_fields_match_ground_truth(extraction):
     """Từng field phải đúng bằng giá trị đã đưa vào khi sinh file."""
     name, result = extraction
 
-    for key, path in FIELD_PATHS.items():
-        assert _value_at(result.data, path) == EXPECTED[key], (
-            f"{name}: {'.'.join(path)} sai"
-        )
+    # Chỉ so các khoá có mặt ở CẢ hai bảng: `FIELD_PATHS` là đường dẫn trong
+    # JSON, `EXPECTED` là ground truth — khoá nào chỉ có ở một bên thì được
+    # kiểm riêng (xem test địa điểm/ngày phát hành bên dưới).
+    shared = [key for key in FIELD_PATHS if key in EXPECTED]
+    assert len(shared) >= 15, f"Bảng đường dẫn và ground truth lệch nhau: {shared}"
+
+    for key in shared:
+        assert field_value(result.data, key) == EXPECTED[key], f"{name}: {key} sai"
+
+
+def test_issue_place_and_date_is_captured(extraction):
+    """Dòng địa điểm và ngày phát hành phải có trong phần mở đầu.
+
+    Dòng này không theo khuôn "nhãn: giá trị" nên nằm ở `preface.paragraphs`;
+    kiểm riêng để nó không bị bỏ quên chỉ vì không có nhãn.
+    """
+    name, result = extraction
+    paragraphs = [p["value"] for p in result.data["preface"]["paragraphs"]]
+
+    assert EXPECTED["issue_place_and_date"] in paragraphs, f"{name}: {paragraphs}"
 
 
 def test_asset_table_matches_ground_truth(extraction):
@@ -111,7 +98,7 @@ def test_asset_table_matches_ground_truth(extraction):
     phải LIỀN (không dấu cách), còn cột mô tả là văn xuôi thì ghép CÓ dấu cách.
     """
     name, result = extraction
-    rows = result.data["assets_valued"]
+    rows = asset_rows(result.data)
 
     assert len(rows) == len(EXPECTED_ASSET_ROWS), name
 
@@ -169,12 +156,13 @@ def test_hidden_and_decorative_text_never_leaks_into_values(extraction):
     """
     name, result = extraction
 
-    for key, path in FIELD_PATHS.items():
-        value = _value_at(result.data, path) or ""
+    for key in FIELD_PATHS:
+        value = field_value(result.data, key) or ""
+
         assert INVISIBLE_LAYER_TEXT not in value, f"{name}: chữ ẩn lẫn vào {key}"
         assert WATERMARK_TEXT not in value, f"{name}: watermark lẫn vào {key}"
 
-    for row in result.data["assets_valued"]:
+    for row in asset_rows(result.data):
         for column in ("description", "area_sqm", "amount_vnd"):
             value = row[column]["value"]
             assert INVISIBLE_LAYER_TEXT not in value, name

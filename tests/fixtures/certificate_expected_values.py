@@ -22,6 +22,7 @@ EXPECTED = {
     "contract_number": "CONTRACT-NO-900",
     "certificate_number": "CERT-NO-900",
     "issue_place_and_date": "TP.HCM, ISSUE-DATE-900",
+    "recipient": "ÔNG: CUSTOMER-NAME-900",
     "customer_name": "ÔNG: CUSTOMER-NAME-900",
     "customer_address": "CUSTOMER-ADDRESS-900",
     "customer_id": "CUSTOMER-ID-900",
