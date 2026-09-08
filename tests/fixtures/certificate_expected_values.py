@@ -71,6 +71,14 @@ EXPECTED_FORM_FIELDS = {
     "nguoi_kiem_tra": "STAFF-NAME-901",
 }
 
+# Nhãn hiển thị của các ô điền thông tin. Tên field trong AcroForm phải là ASCII
+# (nó là khóa kỹ thuật), nhưng nhãn vẽ ra trang thì dùng tiếng Việt cho giống
+# tài liệu thật — và nhờ vậy nhãn cũng đi qua bảng ánh xạ tên như mọi nhãn khác.
+FORM_FIELD_LABELS = {
+    "so_to_ban_do": "Số tờ bản đồ",
+    "nguoi_kiem_tra": "Người kiểm tra",
+}
+
 # Chữ ẩn (chế độ tô 3) và watermark là nội dung KHÔNG thuộc dữ liệu nghiệp vụ.
 # Chúng phải không lọt vào giá trị field nào.
 INVISIBLE_LAYER_TEXT = "BAN NHAP KHONG SU DUNG"

@@ -104,6 +104,9 @@ class FontAudit:
     total_fonts: int
     fonts_with_tounicode: int
     missing: list[str] = field(default_factory=list)
+    # Số ký tự mà mỗi font thiếu ToUnicode đã vẽ. Cần con số này để thông báo
+    # nói được mức độ: "1 ký tự" và "1240 ký tự" là hai tình huống khác nhau.
+    affected_characters: dict[str, int] = field(default_factory=dict)
     # Font khai báo trong /Resources nhưng không vẽ ký tự nào. Không phải lỗi —
     # trình sinh PDF hay khai sẵn font mặc định rồi không dùng. Ghi lại để người
     # đọc biết vì sao chúng không bị tính vào.
@@ -123,6 +126,7 @@ class FontAudit:
             "fonts_with_tounicode": self.fonts_with_tounicode,
             "coverage": round(self.coverage, 4),
             "missing": self.missing,
+            "affected_characters": self.affected_characters,
             "declared_but_unused": self.declared_but_unused,
         }
 

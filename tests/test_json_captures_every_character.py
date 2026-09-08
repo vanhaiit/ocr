@@ -9,9 +9,10 @@ Cách đo ở mức KÝ TỰ, không ở mức dòng. Lý do: JSON tách nhãn k
 ghép các dòng bị ngắt lại, nên so nguyên dòng sẽ báo thiếu hàng loạt dù mọi
 mảnh đều có mặt — phép đo sai chứ không phải dữ liệu sai.
 
-Ngoại lệ duy nhất là các ký tự CẤU TRÚC: dấu hai chấm tách nhãn với giá trị, và
-gạch đầu dòng mở đầu mục liệt kê. Parser tiêu thụ chúng để dựng cấu trúc, và
-chính cấu trúc đó đã mang thông tin chúng biểu đạt.
+Yêu cầu là TUYỆT ĐỐI: không ký tự nào được thiếu, kể cả dấu hai chấm và gạch
+đầu dòng mà phần có cấu trúc đã tiêu thụ, và kể cả chữ trang trí bị loại khỏi
+luồng nghiệp vụ. Khối `text_layer` giữ nguyên văn text theo từng trang chính là
+để bảo đảm điều đó.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from typing import Any
 
 import pytest
 
-from pdf_extract.classify_overlay_glyphs import split_overlay_glyphs
 from pdf_extract.detect_duplicate_glyph_layers import deduplicate_glyphs
 from pdf_extract.extract_text_with_coordinates import (
     canonical_text,
@@ -37,21 +37,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SAMPLES_DIR = ROOT / "samples"
 FEATURES_DIR = SAMPLES_DIR / "font-features"
 
-# Ký tự cấu trúc: parser dùng chúng để tách nhãn/giá trị và nhận mục liệt kê,
-# nên chúng không xuất hiện lại trong giá trị. Thông tin chúng biểu đạt đã nằm
-# trong chính cấu trúc JSON (nhãn riêng, giá trị riêng, danh sách `items`).
-STRUCTURAL_CHARACTERS = set(":-–+●•* ")
-
-# File có text layer hỏng font: ký tự đã sai từ trong PDF và các cột bảng đan
-# xen nhau, nên phép đo này không có ý nghĩa. Hành vi phát hiện nó được khoá ở
-# `test_font_without_tounicode_is_caught.py`.
-EXCLUDED_FROM_COVERAGE = {"Chung_Thu_Tham_Dinh_Gia_Demo.pdf"}
-
-
 def documents_under_test() -> list[Path]:
-    """Mọi PDF được kỳ vọng nhặt hết: mẫu thật và các biến thể tính năng."""
-    paths = [p for p in SAMPLES_DIR.glob("*.pdf") if p.name not in EXCLUDED_FROM_COVERAGE]
-    return sorted(paths) + sorted(FEATURES_DIR.glob("*.pdf"))
+    """MỌI PDF trong bộ mẫu. Không file nào được miễn phép đo độ phủ.
+
+    Kể cả file hỏng font: ký tự của nó sai từ trong PDF, nhưng JSON vẫn phải
+    chứa đủ những ký tự đó — trung thực với nguồn là yêu cầu riêng, khác với
+    nguồn có đúng hay không.
+    """
+    return sorted(SAMPLES_DIR.glob("*.pdf")) + sorted(FEATURES_DIR.glob("*.pdf"))
 
 
 @pytest.fixture(scope="module", params=[str(p) for p in documents_under_test()])
@@ -59,9 +52,10 @@ def coverage(request):
     path = request.param
     result = process_pdf(path)
 
+    # Dùng TOÀN BỘ ký tự, không tách chữ trang trí: watermark cũng là text của
+    # tài liệu nên cũng phải có mặt trong JSON.
     deduplicated, _ = deduplicate_glyphs(extract_positioned_chars(path))
-    body, _ = split_overlay_glyphs(deduplicated)
-    document_text = canonical_text(group_chars_into_lines(body))
+    document_text = canonical_text(group_chars_into_lines(deduplicated))
 
     return Path(path).name, _characters(document_text), _characters(
         "".join(_all_text(result.data, []))
@@ -97,34 +91,41 @@ def test_documents_under_test_exist():
     assert documents_under_test(), "Không tìm thấy PDF nào để đo độ phủ"
 
 
-def test_no_data_character_is_lost(coverage):
-    """MỌI ký tự dữ liệu của tài liệu phải xuất hiện trong JSON.
+def test_no_character_is_lost_at_all(coverage):
+    """KHÔNG ký tự nào của tài liệu được thiếu trong JSON. Yêu cầu tuyệt đối.
 
-    Đây là chốt chặn cho lỗi lớn nhất của bản đầu tiên: template đi tìm một
-    danh sách nhãn định trước nên mọi thứ ngoài danh sách bị bỏ IM LẶNG — mất
-    cả "Kính gửi", các dòng "Căn cứ", mục VI đến IX, mục XII, XIII và khối chữ
-    ký, mà không cổng kiểm tra nào báo gì.
+    Chốt chặn cho lỗi lớn nhất của bản đầu tiên: template đi tìm một danh sách
+    nhãn định trước nên mọi thứ ngoài danh sách bị bỏ IM LẶNG — mất cả "Kính
+    gửi", các dòng "Căn cứ", mục VI đến IX, mục XII, XIII và khối chữ ký, mà
+    không cổng kiểm tra nào báo gì.
+
+    Phép đo gồm cả dấu hai chấm, gạch đầu dòng, và chữ trang trí — không có
+    ngoại lệ nào.
     """
     name, document_chars, json_chars = coverage
     lost = document_chars - json_chars
-    data_lost = {c: n for c, n in lost.items() if c not in STRUCTURAL_CHARACTERS}
 
-    assert not data_lost, f"{name}: JSON thiếu ký tự dữ liệu {data_lost}"
+    assert not lost, f"{name}: JSON thiếu {sum(lost.values())} ký tự: {dict(lost)}"
 
 
-def test_structural_loss_stays_small(coverage):
-    """Phần ký tự cấu trúc bị tiêu thụ phải nhỏ.
+def test_text_layer_block_is_present(coverage):
+    """Khối `text_layer` phải có và phủ mọi trang.
 
-    Dấu hai chấm và gạch đầu dòng biến thành cấu trúc JSON nên không xuất hiện
-    lại — chấp nhận được. Nhưng nếu tỉ lệ này phình lên thì có thể parser đang
-    ăn cả nội dung thật, nên vẫn phải có ngưỡng.
+    Đây là thứ bảo đảm độ phủ tuyệt đối ở test trên: phần có cấu trúc tiêu thụ
+    ký tự phân cách, khối này giữ nguyên văn để không mất gì.
     """
-    name, document_chars, json_chars = coverage
-    total = sum(document_chars.values())
-    lost = sum((document_chars - json_chars).values())
+    name, _, _ = coverage
+    path = SAMPLES_DIR / name
+    if not path.exists():
+        path = FEATURES_DIR / name
 
-    assert total > 0, name
-    assert lost / total <= 0.05, f"{name}: mất {lost}/{total} ký tự"
+    result = process_pdf(str(path))
+    text_layer = result.data["text_layer"]
+
+    assert text_layer["pages"], f"{name}: text_layer không có trang nào"
+    assert [p["page"] for p in text_layer["pages"]] == sorted(
+        p["page"] for p in text_layer["pages"]
+    ), f"{name}: trang không theo thứ tự"
 
 
 def test_table_column_headers_are_captured(coverage):
@@ -138,7 +139,11 @@ def test_table_column_headers_are_captured(coverage):
     if not path.exists():
         path = FEATURES_DIR / name
 
-    table = process_pdf(str(path)).data["sections"]["X"]["table"]
+    sections = process_pdf(str(path)).data["sections"]
+    if "X" not in sections or "table" not in sections["X"]:
+        pytest.skip(f"{name}: không có bảng ở mục X")
+
+    table = sections["X"]["table"]
     headers = [column["value"] for column in table["columns"]]
 
     assert headers, f"{name}: bảng không có tiêu đề cột"
@@ -146,16 +151,27 @@ def test_table_column_headers_are_captured(coverage):
 
 
 def test_total_rows_keep_their_vietnamese_label(coverage):
-    """Các dòng tổng phải giữ nhãn tiếng Việt kèm đơn vị."""
+    """Dòng tổng nào CÓ trong tài liệu thì phải giữ nhãn tiếng Việt kèm đơn vị.
+
+    Không đòi đủ cả ba dòng: có bản chứng thư chỉ ghi "Tổng cộng" và "Làm tròn"
+    mà không có "Bằng chữ". Việc đủ ba dòng ở các file mẫu chuẩn được kiểm riêng
+    qua `test_no_required_field_is_null`.
+    """
     name, _, _ = coverage
     path = SAMPLES_DIR / name
     if not path.exists():
         path = FEATURES_DIR / name
 
-    totals = process_pdf(str(path)).data["sections"]["X"]["table"]["totals"]
+    sections = process_pdf(str(path)).data["sections"]
+    if "X" not in sections or "table" not in sections["X"]:
+        pytest.skip(f"{name}: không có bảng ở mục X")
 
-    for key, entry in totals.items():
-        assert entry is not None, f"{name}: thiếu dòng tổng {key}"
+    totals = sections["X"]["table"]["totals"]
+
+    present = {k: v for k, v in totals.items() if v is not None}
+    assert present, f"{name}: bảng không có dòng tổng nào"
+
+    for key, entry in present.items():
         assert entry["label"], f"{name}: dòng tổng {key} không có nhãn"
 
 

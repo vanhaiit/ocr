@@ -24,6 +24,7 @@ import hashlib
 from pathlib import Path
 
 from .audit_font_tounicode import audit_fonts
+from .build_text_layer_block import build_text_layer
 from .extract_annotation_data import extract_form_fields, extract_hyperlinks
 from .classify_overlay_glyphs import split_overlay_glyphs
 from .classify_pdf_text_layer import classify_pdf, rejection_reason
@@ -76,11 +77,22 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
     # Cổng 2: bảng ToUnicode của font.
     # Chạy sau bước trích xuất để biết font nào THỰC SỰ vẽ chữ; font chỉ được
     # khai báo mà không dùng thì không thể làm sai ký tự nào.
-    font_audit = audit_fonts(pdf_path, {c.fontname for c in raw_chars})
+    usage: dict[str, int] = {}
+    for char in raw_chars:
+        usage[char.fontname] = usage.get(char.fontname, 0) + 1
+
+    font_audit = audit_fonts(pdf_path, set(usage), usage)
     if not font_audit.is_complete:
+        affected = ", ".join(
+            f"{name} ({font_audit.affected_characters.get(name, 0)} ký tự)"
+            for name in font_audit.missing
+        )
         errors.append(
-            "Font thiếu bảng ToUnicode nên ký tự có thể bị đọc sai mà đối chứng "
-            f"chéo không phát hiện được: {', '.join(font_audit.missing)}"
+            f"Font thiếu bảng ToUnicode: {affected}. Ký tự do các font này vẽ "
+            "KHÔNG đọc được đúng, và không tool nào sửa được từ chính file — "
+            "bảng dịch mã glyph sang Unicode không nằm trong PDF. Phải sinh lại "
+            "PDF với font có nhúng ToUnicode (DejaVu Sans, Noto Sans, hoặc Times "
+            "New Roman nhúng)."
         )
 
     raw_canonical = canonical_text(group_chars_into_lines(raw_chars))
@@ -173,14 +185,28 @@ def process_pdf(pdf_path: str) -> ExtractionResult:
         ),
     )
 
+    # Bước 8b: khối text nguyên văn theo trang.
+    #
+    # Phần có cấu trúc tiêu thụ dấu hai chấm và gạch đầu dòng để dựng cấu trúc,
+    # còn chữ trang trí bị loại khỏi luồng nghiệp vụ — nên nếu chỉ có phần cấu
+    # trúc thì JSON không chứa đủ MỌI ký tự của tài liệu. Khối này lấp đúng
+    # khoảng đó, để độ phủ ký tự đạt 100% và kiểm được bằng máy.
+    raw_data["text_layer"] = build_text_layer(lines, overlay_chars)
+
     # Cổng 9: nguồn gốc — mọi giá trị phải nguyên văn.
     # Truyền cả danh sách ký tự kèm toạ độ để cổng dùng được mức chứng minh mạnh
     # (so với ký tự trong bbox) cho các giá trị lấy từ ô bảng.
     # Text để chứng minh nguồn gốc gồm cả dữ liệu annotation: giá trị form field
     # và URL là nội dung THẬT của tài liệu, chỉ không nằm trong content stream.
     # Không đưa vào thì cổng sẽ từ chối oan chính những giá trị nó cần bảo vệ.
+    # Căn cứ gồm text thân LIỀN MẠCH, rồi mới tới chữ trang trí và dữ liệu
+    # annotation. Không dùng bản trộn sẵn: glyph watermark cỡ 60pt chen vào giữa
+    # các dòng thân và phá tính liền mạch của tiêu đề mục.
+    decorative_text = [
+        entry["text"].value for entry in raw_data["text_layer"]["decorative"]
+    ]
     provenance_text = "\n".join(
-        [canonical]
+        [canonical, *decorative_text]
         + [field.value.value for field in form_fields]
         + [link.url for link in hyperlinks]
     )

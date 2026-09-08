@@ -37,12 +37,17 @@ def normalize_font_name(name: str) -> str:
     return cleaned.lower()
 
 
-def audit_fonts(pdf_path: str, used_font_names: set[str] | None = None) -> FontAudit:
+def audit_fonts(
+    pdf_path: str, used_font_names: set[str] | None = None, font_usage: dict[str, int] | None = None
+) -> FontAudit:
     """Trả về tỉ lệ font có ToUnicode và danh sách font thiếu.
 
     `used_font_names` là tên font mà engine trích xuất thực sự gặp khi đọc glyph.
     Truyền vào thì chỉ những font đó bị soát; bỏ trống thì soát mọi font khai báo
     (chặt hơn, dùng khi chưa trích xuất xong).
+
+    `font_usage` là số ký tự mỗi font đã vẽ, để báo cáo nói được MỨC ĐỘ ảnh
+    hưởng — một font hỏng vẽ 1 ký tự khác hẳn một font hỏng vẽ cả bảng số liệu.
     """
     reader = pypdf.PdfReader(pdf_path)
     fonts_seen: dict[str, bool] = {}
@@ -76,10 +81,20 @@ def audit_fonts(pdf_path: str, used_font_names: set[str] | None = None) -> FontA
         if not ok and not _is_decorative(name)
     ]
 
+    counts = {
+        name: sum(
+            count
+            for raw_name, count in (font_usage or {}).items()
+            if normalize_font_name(raw_name) == normalize_font_name(name)
+        )
+        for name in missing
+    }
+
     return FontAudit(
         total_fonts=len(considered),
         fonts_with_tounicode=sum(1 for ok in considered.values() if ok),
         missing=missing,
+        affected_characters={k: v for k, v in counts.items() if v},
         declared_but_unused=sorted(set(fonts_seen) - set(considered)),
     )
 

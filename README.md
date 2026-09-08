@@ -117,10 +117,10 @@ gán tên tiếng Anh. Nhờ vậy nhãn nào chưa có tên vẫn xuất ra tro
 }
 ```
 
-Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 17 field trong các mục,
-5 thửa đất kèm tiêu đề cột, 3 dòng tổng, 2 người ký, 3 chân trang — **121/121
+Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 18 field trong các mục,
+5 thửa đất kèm tiêu đề cột, 3 dòng tổng, 2 người ký, 3 chân trang — **124/124
 giá trị chứng minh được là nguyên văn**, không nhãn nào chưa ánh xạ. Trên cả 15
-file: **997/997 = 100%**.
+file: **1019/1019 = 100%**.
 
 `value` của mỗi mục hợp nhất hai cách trình bày: giá trị viết ngay sau dấu hai
 chấm của tiêu đề (bản 002), hoặc viết xuống dòng dưới (bản 001). Bên tiêu thụ
@@ -139,22 +139,42 @@ hiệu, toàn bộ mục VI–IX, mục XII, mục XIII kèm danh sách phụ l�
 Giờ `parse_document_sections` đọc cấu trúc trước và **không biết gì về nghiệp
 vụ**; template chỉ làm việc đặt tên. Ánh xạ thiếu không còn làm mất dữ liệu.
 
-### Đo "có nhặt hết chưa" bằng độ phủ ký tự
+### Bảo đảm MỌI text vào JSON — đo được, không phải lời hứa
 
-Câu hỏi này phải đo được, không thể chỉ tuyên bố. Phép đo: lấy toàn bộ ký tự
-trong text layer, lấy toàn bộ ký tự xuất hiện trong JSON (gồm cả khóa dict và
-số), rồi so multiset.
+Phần có cấu trúc **tiêu thụ** một số ký tự để dựng cấu trúc (dấu hai chấm tách
+nhãn với giá trị, gạch đầu dòng mở đầu mục liệt kê), và chữ trang trí bị loại
+khỏi luồng nghiệp vụ để không lẫn vào field. Nên chỉ có phần cấu trúc thì JSON
+tuy không mất *dữ liệu* nào nhưng vẫn không chứa đủ *mọi ký tự*.
 
-Đo ở mức **ký tự**, không ở mức dòng — JSON tách nhãn khỏi giá trị và ghép các
-dòng bị ngắt lại, nên so nguyên dòng sẽ báo thiếu hàng loạt dù mọi mảnh đều có
-mặt (phép đo sai, không phải dữ liệu sai).
+Khối `text_layer` lấp đúng khoảng đó:
 
-Kết quả: **0 ký tự dữ liệu bị mất** trên 14/15 file. Phần thiếu còn lại chỉ là
-ký tự **cấu trúc** (`:` tách nhãn với giá trị, `-`/`+`/`●` mở đầu mục liệt kê) —
-chúng đã biến thành chính cấu trúc JSON. File hỏng font bị loại khỏi phép đo vì
-ký tự của nó sai từ trong PDF.
+```json
+"text_layer": {
+  "pages":      [ { "page": 1, "text": "…nguyên văn toàn bộ trang…" }, … ],
+  "decorative": [ { "page": 1, "text": "BAN SAO" } ]     // watermark, để riêng
+}
+```
 
-`test_json_captures_every_character.py` khoá phép đo này.
+Phép đo: lấy toàn bộ ký tự trong text layer, lấy toàn bộ ký tự xuất hiện trong
+JSON (gồm cả khóa dict và số), so multiset. Đo ở mức **ký tự** chứ không mức
+dòng — JSON tách nhãn khỏi giá trị và ghép các dòng bị ngắt, nên so nguyên dòng
+sẽ báo thiếu hàng loạt dù mọi mảnh đều có mặt.
+
+Kết quả: **100.00% trên cả 15 file, không ngoại lệ** — kể cả dấu hai chấm, gạch
+đầu dòng, watermark, và cả file hỏng font. `test_json_captures_every_character.py`
+khoá yêu cầu tuyệt đối này.
+
+### Ánh xạ nhãn: khớp tuyệt đối, rồi khớp theo tiền tố
+
+Nhãn thực tế có thể dài hơn nhãn trong bảng vì bố cục làm nó dính thêm phần sau
+(`Tài sản thẩm định thuộc LAND-LOT-GROUP-001…`). Nên sau khi khớp tuyệt đối thất
+bại, thử khớp **tiền tố** — yêu cầu tiền tố dài tối thiểu 8 ký tự và kết thúc ở
+ranh giới từ, lấy tiền tố dài nhất. Nhãn vẫn không khớp thì vào `unmapped_fields`
+với khóa tự sinh, **không bao giờ bị bỏ im lặng**.
+
+Bảng ánh xạ gom nhiều cách gọi về cùng một khóa: `CCCD`, `CMND`, `CCCD/MST`,
+`Số CCCD`, `CCCD/CMND/MST` đều thành `customer_identity_number`, để bên tiêu thụ
+không phải phân nhánh theo từng bản chứng thư.
 
 ### Ba quy tắc nhận dạng, đều dựa trên dữ liệu có sẵn trong PDF
 
@@ -185,6 +205,11 @@ Mỗi cổng có quyền chặn. Chỉ khi tất cả xanh thì trạng thái m�
 | 7 | Nhận diện template | Không mẫu nào đạt ngưỡng tin cậy |
 | 8 | Bóc field theo nhãn | — |
 | 9 | **Cổng nguồn gốc** | Có giá trị không chứng minh được là nguyên văn của PDF |
+
+Trạng thái khi có cổng đỏ là `needs_review`: **vẫn xuất đầy đủ dữ liệu** kèm
+danh sách lỗi cụ thể, để người dùng soi được vấn đề thay vì chỉ nhận một lời từ
+chối. CI chặn bằng mã thoát 1, hoặc bằng `font_audit.coverage < 1` /
+`cross_verify.char_multiset_match == false` nếu muốn tiêu chí riêng.
 
 ### Cổng 4 — chữ đổ bóng và in đậm giả
 
@@ -315,7 +340,7 @@ Pipeline không cần sửa. Tài liệu không khớp mẫu nào bị từ ch�
 ## Test
 
 ```bash
-./.venv/bin/pytest -q      # 292 test
+./.venv/bin/pytest -q      # 297 test
 ```
 
 Test kiểm đúng những điều đã cam kết, không kiểm "chạy được": không mất ký tự giữa các engine, phủ `ToUnicode` 100%, mọi giá trị truy được về nguồn, số dòng bảng và thứ tự STT, và — quan trọng nhất — cổng nguồn gốc thật sự chặn được giá trị bịa cùng giá trị bị sửa một ký tự.
@@ -372,7 +397,30 @@ File được giữ làm fixture âm và **phải không bao giờ được gắ
 
 Đáng chú ý: **cổng 9 vẫn xanh 31/31**, và đó là đúng. Cổng nguồn gốc chứng minh *"giá trị khớp với những gì PDF ghi"*, không phải *"những gì PDF ghi là đúng"*. Trung thực với nguồn và tính đúng của nguồn là hai việc khác nhau — chỉ cổng 2 và cổng 5 nói được việc thứ hai. Đặt file ngoài `samples/` để không lẫn với mẫu chuẩn (vốn phải luôn xanh).
 
-Nếu file này vốn định làm mẫu thật thì cần sinh lại bằng font có glyph tiếng Việt và có `ToUnicode` (DejaVu Sans, Noto Sans, Times New Roman nhúng) — ba font `DejaVuSans` trong cùng file đó hoàn toàn ổn, chỉ phần vẽ bằng `/Helvetica` là hỏng.
+**Không sửa được từ chính file, và đây là kết luận đã kiểm.** Trang 2 của file
+đó vẽ bảng bằng `/Helvetica` cùng `/ZapfDingbats` — cả hai là font base14 không
+nhúng, không có `ToUnicode`. Bằng chứng dứt khoát: **PDF hiển thị chính nó** ra
+`Giá tr■ Quy■n s■ d■ng ■■t` — ô vuông `.notdef` ở đúng chỗ các dấu tiếng Việt.
+Glyph không có trong file, nên không tool nào cứu được, kể cả OCR (pixel là ô
+vuông).
+
+Từng thử hướng "vay bảng `ToUnicode` từ font khác cùng file" — các font
+`DejaVuSans` trong đó dùng chung một bảng mã và giữ nguyên ASCII, nên về nguyên
+tắc vay được. Nhưng kiểm ra thì `/Helvetica` dùng mã 225 mà không donor nào phủ,
+và `/ZapfDingbats` chỉ dùng một mã nên không cách nào xác thực bảng vay là đúng.
+Hướng này bị **bỏ**: một bản vá không chứng minh được sẽ làm file hỏng trông như
+đã sửa — tệ hơn là không vá. Thay vào đó thông báo nói rõ mức độ:
+
+```
+Font thiếu bảng ToUnicode: /Helvetica (426 ký tự). Ký tự do các font này vẽ
+KHÔNG đọc được đúng, và không tool nào sửa được từ chính file — bảng dịch mã
+glyph sang Unicode không nằm trong PDF. Phải sinh lại PDF với font có nhúng
+ToUnicode (DejaVu Sans, Noto Sans, hoặc Times New Roman nhúng).
+```
+
+Đáng chú ý: độ phủ ký tự của file này vẫn **100%** — JSON chứa đủ mọi ký tự PDF
+ghi, kể cả những ký tự sai. Trung thực với nguồn và nguồn có đúng hay không là
+hai việc khác nhau, và chỉ cổng 2 với cổng 5 nói được việc thứ hai.
 
 ## Điều đã biết cần lưu ý
 
@@ -389,4 +437,4 @@ Nếu file này vốn định làm mẫu thật thì cần sinh lại bằng fon
 3. **Nhãn mới của các bản chứng thư khác** sẽ rơi vào `unmapped_fields` — cần rà định kỳ để bổ sung tên tiếng Anh vào `chung_thu_field_names.py`. Hai file mẫu hiện tại không còn nhãn nào chưa ánh xạ.
 4. **Cột nào là văn xuôi** trong các template sau: hiện phải khai báo tay bằng `rejoin_prose_cell()`. Với vài template thì ổn; nhiều hơn thì nên gắn kiểu cột vào khai báo template.
 5. **Ngưỡng tách chữ trang trí** đang là `2.2 × cỡ chữ trung vị`. Watermark thật thường 3–5 lần, tiêu đề lớn nhất trong chứng thư 1.25 lần — khoảng cách rộng, nhưng cần xác nhận trên tài liệu thật có watermark.
-6. **Trạng thái cho lỗi hỏng ký tự**: hiện là `needs_review` (vẫn xuất dữ liệu, mã thoát 1). Có nên nâng lên `rejected` không? Lập luận cho việc nâng: khi cổng 2 hoặc cổng 5 đỏ thì text *đã biết là sai*, khác về bản chất với "bóc thiếu field". Lập luận giữ nguyên: vẫn cần thấy dữ liệu để soi lỗi. CI hiện có thể tự chặn bằng `font_audit.coverage < 1` hoặc `char_multiset_match == false`.
+6. **Số tiền thật**: quy tắc gạch nối chỉ cứu được token ngắt tại `-`. Nếu `1.234.567.000` bị ngắt sau dấu `.` thì cần dữ liệu thật để chốt cách xử lý.

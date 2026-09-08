@@ -54,10 +54,33 @@ class PositionedChar:
     bottom: float
     fontname: str
     size: float
-    # False khi chữ bị quay (ma trận có thành phần dọc trội hơn thành phần ngang).
-    upright: bool = True
-    # Với chữ quay: True nghĩa là đọc từ dưới lên trên trang.
-    reads_upward: bool = False
+    # Vector chỉ hướng đường cơ sở, lấy từ ma trận biến đổi text của PDF.
+    # Giữ nguyên vector thay vì chỉ một cờ để còn sắp được chữ quay CHÉO
+    # (watermark 45 độ) — với chữ chéo thì cả trục ngang và dọc đều đáng kể.
+    direction_x: float = 1.0
+    direction_y: float = 0.0
+
+    @property
+    def upright(self) -> bool:
+        """Chữ thường: thành phần ngang của hướng viết trội hơn hoặc bằng dọc."""
+        return abs(self.direction_y) <= abs(self.direction_x)
+
+    @property
+    def reads_upward(self) -> bool:
+        """Chữ quay dọc đọc từ dưới lên trên trang."""
+        return self.direction_y > 0
+
+    @property
+    def reading_position(self) -> float:
+        """Vị trí của ký tự dọc theo hướng viết, dùng để sắp thứ tự đọc.
+
+        Chiếu tâm ký tự lên vector hướng viết. Trục dọc đảo dấu vì hệ toạ độ
+        của pipeline có gốc ở trên (`top` tăng khi đi xuống trang) còn hướng
+        viết lấy từ hệ PDF có gốc ở dưới.
+        """
+        center_x = (self.x0 + self.x1) / 2
+        center_y = (self.top + self.bottom) / 2
+        return self.direction_x * center_x - self.direction_y * center_y
 
 
 @dataclass
@@ -153,22 +176,16 @@ def extract_positioned_chars(pdf_path: str) -> list[PositionedChar]:
     return fold_combining_marks(chars)
 
 
-def _writing_direction(matrix) -> dict[str, bool]:
-    """Suy ra hướng viết từ ma trận biến đổi text của PDF.
+def _writing_direction(matrix) -> dict[str, float]:
+    """Lấy vector chỉ hướng đường cơ sở từ ma trận biến đổi text của PDF.
 
-    Hai thành phần đầu của ma trận là vector chỉ hướng đường cơ sở. Thành phần
-    dọc trội hơn ngang nghĩa là chữ bị quay; dấu của nó cho biết chữ đọc lên
-    hay xuống theo hệ toạ độ PDF (gốc dưới-trái, nên dương là lên trên trang).
+    Hai thành phần đầu của ma trận chính là vector đó. Giữ nguyên cả hai thành
+    phần (không rút thành cờ) để còn sắp đúng thứ tự đọc cho chữ quay chéo.
     """
     if not matrix or len(matrix) < 2:
-        return {"upright": True, "reads_upward": False}
+        return {"direction_x": 1.0, "direction_y": 0.0}
 
-    horizontal, vertical = float(matrix[0]), float(matrix[1])
-
-    if abs(vertical) <= abs(horizontal):
-        return {"upright": True, "reads_upward": False}
-
-    return {"upright": False, "reads_upward": vertical > 0}
+    return {"direction_x": float(matrix[0]), "direction_y": float(matrix[1])}
 
 
 def fold_combining_marks(chars: list[PositionedChar]) -> list[PositionedChar]:
@@ -209,8 +226,8 @@ def fold_combining_marks(chars: list[PositionedChar]) -> list[PositionedChar]:
                 bottom=base.bottom,
                 fontname=base.fontname,
                 size=base.size,
-                upright=base.upright,
-                reads_upward=base.reads_upward,
+                direction_x=base.direction_x,
+                direction_y=base.direction_y,
             )
             continue
 

@@ -13,6 +13,7 @@ from .certificate_expected_values import (
     EXPECTED,
     EXPECTED_ASSET_ROWS,
     EXPECTED_FORM_FIELDS,
+    FORM_FIELD_LABELS,
     INVISIBLE_LAYER_TEXT,
     PAGE_HEIGHT,
     PAGE_WIDTH,
@@ -201,7 +202,7 @@ def _draw_form_fields(builder: CertificatePdfBuilder) -> None:
 
     for index, (name, value) in enumerate(EXPECTED_FORM_FIELDS.items()):
         field_y = y - index * 26.0
-        builder.draw_text(LABEL_X, f"- {name}:", y=field_y + 4.0)
+        builder.draw_text(LABEL_X, f"- {FORM_FIELD_LABELS[name]}:", y=field_y + 4.0)
         form.textfield(
             name=name,
             value=value,
