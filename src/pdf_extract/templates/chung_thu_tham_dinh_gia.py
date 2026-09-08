@@ -99,14 +99,39 @@ def _render_section(section: DocumentSection, context: DocumentContext) -> dict[
         **_render_block(section.block, section_number=section.number),
     }
 
-    if section.inline_value is not None:
-        # Giá trị viết ngay sau dấu hai chấm của tiêu đề mục (mục IV, V).
-        rendered["value"] = section.inline_value
+    # `value` là giá trị chính của mục, hợp nhất hai cách trình bày.
+    #
+    # Cùng một nội dung nhưng mỗi bản chứng thư đặt một chỗ khác nhau: mục VI
+    # của bản 002 ghi giá trị ngay sau dấu hai chấm của tiêu đề, còn bản 001 ghi
+    # xuống dòng dưới. Không hợp nhất thì bên tiêu thụ phải kiểm cả `value` lẫn
+    # `paragraphs` cho mọi mục. `paragraphs` vẫn giữ nguyên để không mất chi tiết
+    # về cách tài liệu chia đoạn.
+    value = section.inline_value or _merge_paragraphs(section.block.paragraphs)
+    if value is not None:
+        rendered["value"] = value
 
     if section.number == ASSET_TABLE_SECTION:
         rendered["table"] = _render_asset_table(context.tables)
 
     return rendered
+
+
+def _merge_paragraphs(paragraphs: list[SourcedValue]) -> SourcedValue | None:
+    """Gộp các đoạn văn của mục thành một giá trị, giữ từng đoạn làm mảnh nguồn."""
+    if not paragraphs:
+        return None
+
+    if len(paragraphs) == 1:
+        return paragraphs[0]
+
+    return SourcedValue(
+        value=" ".join(p.value for p in paragraphs),
+        page=paragraphs[0].page,
+        bbox=paragraphs[0].bbox,
+        # Mỗi đoạn là một mảnh nguồn: các đoạn có thể không liền nhau trong thứ
+        # tự đọc, nên cổng nguồn gốc chứng minh theo từng mảnh.
+        source_lines=[p.value for p in paragraphs],
+    )
 
 
 def _render_block(block: LineBlock, *, section_number: str | None) -> dict[str, Any]:

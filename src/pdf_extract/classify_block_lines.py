@@ -21,7 +21,7 @@ from .models import BoundingBox, SourcedValue
 from .parse_labeled_lines import (
     BULLET_MARKERS,
     LabeledField,
-    build_field,
+    build_fields,
     continuation_belongs_to_label,
     label_column_x,
     sourced_line,
@@ -95,9 +95,12 @@ def classify_lines(lines: list[TextLine], inline_start: str | None = None) -> Li
         ):
             if split is not None:
                 label_chars, value_chars = split
-                pending_field = build_field([label_chars], [value_chars], line.page)
+                built = build_fields([label_chars], [value_chars], line.page)
+                # Dòng nối tiếp gắn vào field CUỐI: một dòng có thể sinh nhiều
+                # field khi phần giá trị còn chứa cặp nhãn-giá trị ở cột kế bên.
+                pending_field = built[-1] if built else None
                 if pending_field is not None:
-                    block.fields.append(pending_field)
+                    block.fields.extend(built)
                     pending_columns = (
                         label_column_x(label_chars),
                         label_column_x(value_chars),
@@ -133,9 +136,9 @@ def classify_single_column(block: LineBlock, group, page: int) -> None:
     separator = next((i for i, c in enumerate(group) if c.text == ":"), None)
 
     if separator is not None and _looks_like_label(group[:separator]):
-        entry = build_field([group[:separator]], [group[separator + 1:]], page)
-        if entry is not None:
-            block.fields.append(entry)
+        entries = build_fields([group[:separator]], [group[separator + 1:]], page)
+        if entries:
+            block.fields.extend(entries)
             return
 
     value = sourced_value_of(group, page)

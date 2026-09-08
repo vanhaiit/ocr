@@ -264,7 +264,17 @@ def segment_value_containing(lines: list[TextLine], needle: str) -> SourcedValue
 
 
 def rejoin_prose_cell(cell: SourcedValue) -> SourcedValue:
-    """Ghép lại ô bảng chứa VĂN XUÔI, chèn dấu cách giữa các dòng.
+    """Ghép lại ô bảng chứa VĂN XUÔI, quyết định dấu cách theo TỪNG CHỖ NGẮT.
+
+    Một ô văn xuôi có thể chứa cả hai kiểu ngắt dòng:
+
+        "Giá trị Quyền sử dụng" + "đất LAND-LOT-001"   -> ranh giới TỪ, cần dấu cách
+        "PROPERTY-" + "DISTRICT-001"                    -> ngắt GIỮA token, không dấu cách
+
+    Phân biệt bằng quy tắc gạch nối cuối dòng: dòng kết thúc bằng "-" nghĩa là
+    token bị cắt làm đôi, nối liền; ngược lại là ranh giới từ, chèn dấu cách.
+    Chọn theo cột (một chính sách cho cả ô) thì sai một trong hai kiểu —
+    "PROPERTY- DISTRICT-001" là kết quả của cách làm đó.
 
     Mặc định của tầng dựng bảng là ghép liền — đúng cho cột số và cột mã, nhưng
     sai cho văn xuôi: "Giá trị Quyền sử dụng" + "đất LAND-LOT-001" ghép liền sẽ
@@ -278,11 +288,22 @@ def rejoin_prose_cell(cell: SourcedValue) -> SourcedValue:
         return cell
 
     return SourcedValue(
-        value=" ".join(cell.source_lines),
+        value=_join_prose_lines(cell.source_lines),
         page=cell.page,
         bbox=cell.bbox,
         source_lines=cell.source_lines,
     )
+
+
+def _join_prose_lines(lines: list[str]) -> str:
+    """Nối các dòng, chèn dấu cách trừ khi dòng trước kết thúc bằng gạch nối."""
+    joined = lines[0]
+
+    for line in lines[1:]:
+        separator = "" if joined.endswith("-") else " "
+        joined = f"{joined}{separator}{line}"
+
+    return joined
 
 
 def value_from_table_lookup(tables: list, label: str) -> SourcedValue | None:

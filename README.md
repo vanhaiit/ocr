@@ -117,10 +117,14 @@ gán tên tiếng Anh. Nhờ vậy nhãn nào chưa có tên vẫn xuất ra tro
 }
 ```
 
-Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 16 field trong các mục,
-5 thửa đất kèm tiêu đề cột, 3 dòng tổng, 2 người ký, 3 chân trang — **112/112
+Trên `CT-SAMPLE-001`: 13 mục, 3 field ở phần mở đầu, 17 field trong các mục,
+5 thửa đất kèm tiêu đề cột, 3 dòng tổng, 2 người ký, 3 chân trang — **121/121
 giá trị chứng minh được là nguyên văn**, không nhãn nào chưa ánh xạ. Trên cả 15
-file: **981/981 = 100%**.
+file: **997/997 = 100%**.
+
+`value` của mỗi mục hợp nhất hai cách trình bày: giá trị viết ngay sau dấu hai
+chấm của tiêu đề (bản 002), hoặc viết xuống dòng dưới (bản 001). Bên tiêu thụ
+đọc `sections.VI.value` là đủ, không phải kiểm thêm `paragraphs`.
 
 Mỗi field mang cả `label` nguyên văn tiếng Việt và khóa tiếng Anh, nên đọc JSON
 vẫn đối chiếu được với bản giấy.
@@ -159,6 +163,8 @@ ký tự của nó sai từ trong PDF.
 | Dòng nối tiếp thuộc **nhãn** hay **giá trị**? | Theo toạ độ: gần cột nhãn hay gần cột giá trị hơn (`Hồ sơ pháp lý khách` + `hàng cung cấp` là nhãn; `với đất thuộc...` là giá trị) |
 | Dòng có phải **nhãn mới**? | Phải bắt đầu bằng chữ HOA hoặc chữ số. Phần cuối câu bị ngắt dòng bắt đầu bằng chữ thường (`tại thời điểm... như sau:`) nên không bị nhận nhầm |
 | Dòng có **nối tiếp** dòng trước? | Phải liền kề theo chiều dọc và cùng trang. Hai câu nằm trước/sau một bảng không được nối — dòng bảng đã bị loại nên chúng trông như liền nhau |
+| Ô văn xuôi ngắt dòng: **có chèn dấu cách?** | Theo từng chỗ ngắt: dòng kết thúc bằng `-` là token bị cắt đôi (`PROPERTY-` + `DISTRICT-001`) nên nối liền; ngược lại là ranh giới từ nên chèn dấu cách. Một chính sách cho cả ô thì sai một trong hai kiểu |
+| Hai cặp nhãn-giá trị **cạnh nhau** trên một dòng? | Tách theo cột, kể cả khi khoảng cách được tạo bằng chuỗi space thật thay vì toạ độ (`Đại diện: Ông: X` ‖ `Chức vụ: Y`) |
 
 Khối chữ ký nhận ra bằng "nhiều cột + thụt xa lề", dò từ dòng cuối lên — không
 theo số trang, vì khối này có thể vắt qua hai trang (vai trò và số thẻ ở trang
@@ -334,6 +340,21 @@ Cách ghép đúng phụ thuộc **kiểu dữ liệu của cột**, mà tầng 
 - Cột văn xuôi: template gọi `rejoin_prose_cell()` để ghép có dấu cách, tránh `"...sử dụngđất..."`.
 
 `SourcedValue.source_lines` giữ các dòng vật lý gốc để việc ghép lại luôn khả thi (không xuất ra JSON).
+
+## Audit output so với PDF gốc
+
+Phép đo độ phủ ký tự chỉ chứng minh **không mất gì** — nó không chứng minh **gán
+đúng chỗ**. Nên phải render PDF ra ảnh và soi từng mục bằng mắt. Lần audit đó tìm
+ra ba điểm mà mọi phép đo tự động đều báo xanh:
+
+| Phát hiện | Kết luận |
+|---|---|
+| `PROPERTY- DISTRICT-001` có dấu cách thừa | **Lỗi thật.** Ô ngắt dòng ngay tại gạch nối, mà ghép cột văn xuôi lại chèn dấu cách. Sửa bằng quy tắc gạch nối cuối dòng |
+| `Đại diện` gộp hai cột thành một giá trị | **Thiếu chính xác.** `Chức vụ: Giám đốc Chi nhánh` là cặp nhãn-giá trị riêng. Không mất dữ liệu nhưng đáng có field riêng — nay là `company_representative_position` |
+| Tiêu đề cột hiện `(m²)` nhưng JSON ghi `(m2)` | **Không phải lỗi.** Bảng `ToUnicode` của PDF map glyph đó thành `2` (U+0032), không phải `²` (U+00B2); nó chỉ *trông* như chỉ số trên vì được vẽ ở baseline cao hơn. JSON trung thực với PDF |
+
+Cùng lần audit, mục VI–IX cho thấy hai bản chứng thư đặt cùng một nội dung ở hai
+chỗ khác nhau — dẫn tới việc hợp nhất `value` nói ở trên.
 
 ## Fixture âm — ca hỏng font thật
 

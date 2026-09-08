@@ -53,6 +53,8 @@ SECTION_FIELD_NAMES = {
         "dia chi": "company_address",
         "ma so thue": "company_tax_id",
         "dai dien": "company_representative",
+        # Nằm ở cột kế bên trên cùng dòng "Đại diện", tách ra thành field riêng.
+        "chuc vu": "company_representative_position",
     },
     "III": {
         "loai hinh tai san": "asset_type",
