@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .models import ExtractionStatus
 from .pipeline import process_document
+from .render_markdown import render_markdown
 
 EXIT_ALL_VERIFIED = 0
 EXIT_NEEDS_REVIEW = 1
@@ -50,7 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--out-dir",
         type=Path,
-        help="Thư mục ghi file JSON. Không có thì in ra stdout.",
+        default=Path("output"),
+        help="Thư mục ghi file JSON (mặc định: ./output). Dùng --stdout để in ra stdout thay vào đó.",
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="In JSON ra stdout thay vì ghi file (bỏ qua --out-dir).",
     )
     parser.add_argument(
         "--summary-only",
@@ -101,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Không tìm thấy PDF nào tại {args.target}", file=sys.stderr)
         return EXIT_REJECTED
 
-    if args.out_dir:
+    write_to_dir = not args.stdout
+    if write_to_dir:
         args.out_dir.mkdir(parents=True, exist_ok=True)
 
     exit_code = EXIT_ALL_VERIFIED
@@ -117,12 +125,19 @@ def main(argv: list[str] | None = None) -> int:
 
         _print_summary(path.name, payload)
 
-        if args.out_dir:
-            out_path = args.out_dir / f"{path.stem}.json"
-            out_path.write_text(
+        if write_to_dir:
+            # `path.stem` một mình có thể trùng giữa PDF và DOCX cùng tên gốc
+            # (ví dụ sinh DOCX từ PDF) — giữ nguyên phần mở rộng gốc để không
+            # ghi đè nhau khi cả hai định dạng nằm trong cùng thư mục ra.
+            json_path = args.out_dir / f"{path.name}.json"
+            json_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            print(f"  -> {out_path}", file=sys.stderr)
+            print(f"  -> {json_path}", file=sys.stderr)
+
+            md_path = args.out_dir / f"{path.name}.md"
+            md_path.write_text(render_markdown(path.name, payload), encoding="utf-8")
+            print(f"  -> {md_path}", file=sys.stderr)
         elif not args.summary_only:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
 
